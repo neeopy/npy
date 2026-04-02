@@ -15,8 +15,6 @@ npm install @npy/fetch
 ## usage
 
 ### simple fetch
-
-drop-in replacement for the global `fetch`:
 ```ts
 import { fetch } from '@npy/fetch'
 
@@ -58,8 +56,6 @@ fetch.close()
 ```
 
 ### custom i/o options
-
-tune buffers, limits, and keepalive behavior:
 ```ts
 import { HttpClient } from '@npy/fetch'
 
@@ -94,8 +90,6 @@ await client.close()
 ```
 
 ### using `HttpClient` directly
-
-lower-level api, useful when you want full control without the fetch wrapper:
 ```ts
 import { HttpClient } from '@npy/fetch'
 
@@ -111,3 +105,7 @@ const response = await client.send({
 console.log(await response.json())
 await client.close()
 ```
+
+---
+
+based on [deno-simple-fetch](https://github.com/esroyo/deno-simple-fetch).
