@@ -355,10 +355,3 @@ export class HttpStatusError extends FetchError {
         this.statusCode = statusCode;
     }
 }
-
-/* aliases legados por uma versão */
-export { FetchError as FetchBaseError };
-export class AbortError extends RequestAbortedError {}
-export class NetworkError extends ConnectionError {}
-export class TimeoutError extends ConnectTimeoutError {}
-export class HttpError extends HttpStatusError {}
