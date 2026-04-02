@@ -4,6 +4,7 @@ node_modules/
 **/.DS_Store
 .idea
 .vscode
+.dumps/
 *.log
 **/benchmarks/
 /docs
