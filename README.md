@@ -9,5 +9,5 @@ feel free to use, contribute, or leave feedback if you find them useful :>
 
 ## packages
 
-- [`@npy/fetch`](./packages/fetch) — a low-level http client built on raw tcp sockets
+- [`@npy/fetch`](./packages/fetch) — a low-level http client built on raw tcp sockets with http/s and socks proxy support for bun and node
 - [`@npy/proxy-kit`](./packages/proxy-kit) — proxy uri parsing, stringification and connection utilities
