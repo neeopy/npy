@@ -1,0 +1,35 @@
+{
+    "name": "@npy/fetch",
+    "type": "module",
+    "version": "0.1.0",
+    "license": "MIT",
+    "sideEffects": false,
+    "exports": {
+        ".": "./src/index.ts"
+    },
+    "scripts": {
+        "bench": "node --import=tsx ./benchmarks/index.ts",
+        "bench:direct": "node --import=tsx ./benchmarks/direct.ts",
+        "bench:proxy": "node --import=tsx ./benchmarks/proxy.ts"
+    },
+    "devDependencies": {
+        "@types/bytes": "^3.1.5",
+        "axios": "^1.8.4",
+        "got": "^14.4.6",
+        "hpagent": "^1.2.0",
+        "http-proxy-agent": "^7.0.2",
+        "node-fetch": "^3.3.2",
+        "proxy-chain": "^2.7.1",
+        "undici": "^7.13.0"
+    },
+    "dependencies": {
+        "@fuman/io": "^0.0.19",
+        "@fuman/net": "^0.0.19",
+        "@fuman/node": "^0.0.19",
+        "@fuman/utils": "^0.0.19",
+        "@npy/proxy-kit": "workspace:*",
+        "bytes": "^3.1.2",
+        "generic-pool": "^3.9.0",
+        "mitata": "^1.0.34"
+    }
+}

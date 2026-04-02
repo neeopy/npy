@@ -1,0 +1,14 @@
+node_modules/
+**/dist/
+.nyc_output/
+**/.DS_Store
+.idea
+.vscode
+*.log
+**/benchmarks/
+/docs
+
+coverage
+.rollup.cache
+*.tsbuildinfo
+/private

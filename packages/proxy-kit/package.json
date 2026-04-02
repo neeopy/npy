@@ -1,0 +1,17 @@
+{
+    "name": "@npy/proxy-kit",
+    "type": "module",
+    "version": "0.1.0",
+    "license": "MIT",
+    "sideEffects": false,
+    "exports": {
+        ".": "./src/index.ts"
+    },
+    "devDependencies": {
+        "type-fest": "^5.5.0"
+    },
+    "dependencies": {
+        "@fuman/net": "^0.0.19",
+        "tlds": "^1.261.0"
+    }
+}
