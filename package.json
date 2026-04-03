@@ -5,7 +5,6 @@
     "version": "0.1.0",
     "license": "MIT",
     "scripts": {
-        "prepare": "fuman-build build-vite-plugin",
         "build": "bun run scripts/build-all.js",
         "release": "fuman-build release",
         "test": "bun test"
