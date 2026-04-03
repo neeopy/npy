@@ -1,8 +1,9 @@
-import { ProxyDialer } from "../src/dialers/proxy.ts";
-import { createFetch } from "../src/fetch.ts";
-import { HttpClient } from "../src/http-client.ts";
+import { ProxyDialer } from "../src/dialers/proxy";
+import { createFetch } from "../src/fetch";
+import { HttpClient } from "../src/http-client";
 
-const proxyUrl = process.env.HTTP_PROXY ?? "http://127.0.0.1:8080";
+const proxyUrl =
+    process.env.HTTP_PROXY ?? "http://V0rk3M:phA3fT@186.179.60.209:9546";
 
 const client = new HttpClient({
     dialer: new ProxyDialer(proxyUrl),
@@ -28,5 +29,5 @@ try {
     console.log("proxy:", proxyUrl);
     console.log("origin seen by server:", data.origin);
 } finally {
-    await fetch.close();
+    await client.close();
 }

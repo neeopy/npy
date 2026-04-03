@@ -28,7 +28,4 @@ jobs:
         run: bun install
 
       - name: Release
-        run: bunx fuman-build release --type ${{ inputs.type }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        un: bunx fuman-build release --help
