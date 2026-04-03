@@ -2,13 +2,6 @@ name: release
 
 on:
   workflow_dispatch:
-    inputs:
-      type:
-        description: 'Release type'
-        required: false
-        default: 'auto'
-        type: choice
-        options: [auto, major, minor, patch]
 
 jobs:
   release:
@@ -28,4 +21,7 @@ jobs:
         run: bun install
 
       - name: Release
-        un: bunx fuman-build release --help
+        run: bunx fuman-build release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
