@@ -7,11 +7,6 @@
     "exports": {
         ".": "./src/index.ts"
     },
-    "files": [
-        "dist",
-        "LICENSE",
-        "README.md"
-    ],
     "scripts": {
         "bench": "node --import=tsx ./benchmarks/index.ts",
         "bench:direct": "node --import=tsx ./benchmarks/direct.ts",
@@ -25,7 +20,8 @@
         "http-proxy-agent": "^7.0.2",
         "node-fetch": "^3.3.2",
         "proxy-chain": "^2.7.1",
-        "undici": "^7.13.0"
+        "undici": "^7.13.0",
+        "mitata": "^1.0.34"
     },
     "dependencies": {
         "@fuman/io": "^0.0.19",
@@ -34,7 +30,6 @@
         "@fuman/utils": "^0.0.19",
         "@npy/proxy-kit": "workspace:*",
         "bytes": "^3.1.2",
-        "generic-pool": "^3.9.0",
-        "mitata": "^1.0.34"
+        "generic-pool": "^3.9.0"
     }
 }

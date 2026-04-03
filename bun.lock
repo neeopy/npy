@@ -31,7 +31,6 @@
         "@npy/proxy-kit": "workspace:*",
         "bytes": "^3.1.2",
         "generic-pool": "^3.9.0",
-        "mitata": "^1.0.34",
       },
       "devDependencies": {
         "@types/bytes": "^3.1.5",
@@ -39,6 +38,7 @@
         "got": "^14.4.6",
         "hpagent": "^1.2.0",
         "http-proxy-agent": "^7.0.2",
+        "mitata": "^1.0.34",
         "node-fetch": "^3.3.2",
         "proxy-chain": "^2.7.1",
         "undici": "^7.13.0",

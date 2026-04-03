@@ -20,6 +20,9 @@ const config = defineConfig(() => {
             fumanBuild({
                 root: __dirname,
                 insertTypesEntry: true,
+                finalizePackageJson({ packageJson }) {
+                    packageJson.files = ['**/*']
+                },
             }),
             dts({
                 exclude: ['**/*.test.ts', '**/benchmarks/**', '**/examples/**'],
