@@ -4,6 +4,11 @@
     "version": "0.1.0",
     "license": "MIT",
     "sideEffects": false,
+    "files": [
+        "dist",
+        "LICENSE",
+        "README.md"
+    ],
     "exports": {
         ".": "./src/index.ts"
     },

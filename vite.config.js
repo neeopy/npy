@@ -22,7 +22,10 @@ const config = defineConfig(() => {
                 insertTypesEntry: true,
             }),
             dts({
-                exclude: ['**/*.test.ts', '**/benchmarks/**'],
+                exclude: ['**/*.test.ts', '**/benchmarks/**', '**/examples/**'],
+                compilerOptions: {
+                    isolatedDeclarations: false,
+                },
             }),
         ],
     }

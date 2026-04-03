@@ -7,6 +7,11 @@
     "exports": {
         ".": "./src/index.ts"
     },
+    "files": [
+        "dist",
+        "LICENSE",
+        "README.md"
+    ],
     "scripts": {
         "bench": "node --import=tsx ./benchmarks/index.ts",
         "bench:direct": "node --import=tsx ./benchmarks/direct.ts",
