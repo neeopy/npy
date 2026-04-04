@@ -1,12 +1,12 @@
-import { fumanBuild } from '@fuman/build/vite'
-import { nodeExternals } from 'rollup-plugin-node-externals'
-import { defineConfig } from 'vite'
-import dts from 'vite-plugin-dts'
+import { fumanBuild } from "@fuman/build/vite";
+import { nodeExternals } from "rollup-plugin-node-externals";
+import { defineConfig } from "vite";
+import dts from "vite-plugin-dts";
 
 const config = defineConfig(() => {
     return {
         build: {
-            target: 'esnext',
+            target: "esnext",
             rollupOptions: {
                 output: {
                     // re-exported namespaces can't be tree-shaken when bundled
@@ -21,17 +21,22 @@ const config = defineConfig(() => {
                 root: __dirname,
                 insertTypesEntry: true,
                 finalizePackageJson({ packageJson }) {
-                    packageJson.files = ['**/*']
+                    packageJson.files = ["**/*"];
                 },
             }),
             dts({
-                exclude: ['**/*.test.ts', '**/benchmarks/**', '**/examples/**'],
+                exclude: [
+                    "**/*.test.ts",
+                    "**/benchmarks/**",
+                    "**/examples/**",
+                    "**/tests/**",
+                ],
                 compilerOptions: {
                     isolatedDeclarations: false,
                 },
             }),
         ],
-    }
-})
+    };
+});
 
-export default config
+export default config;

@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { createFetch, HttpClient, normalizeHeaders } from "../src/fetch.ts";
-import { createTestServer } from "./test-utils.ts";
+import { createFetch, HttpClient, normalizeHeaders } from "../src/fetch";
+import { createTestServer } from "./test-utils";
 
 describe("fetch.ts weblike API", () => {
     const testServer = createTestServer();
@@ -8,6 +8,34 @@ describe("fetch.ts weblike API", () => {
     afterAll(async () => {
         await testServer.stop();
     });
+
+    async function withEnv(
+        values: Partial<Record<string, string | undefined>>,
+        run: () => Promise<void>,
+    ): Promise<void> {
+        const previous = new Map<string, string | undefined>();
+
+        for (const [key, value] of Object.entries(values)) {
+            previous.set(key, process.env[key]);
+            if (value == null) {
+                delete process.env[key];
+            } else {
+                process.env[key] = value;
+            }
+        }
+
+        try {
+            await run();
+        } finally {
+            for (const [key, value] of previous) {
+                if (value == null) {
+                    delete process.env[key];
+                } else {
+                    process.env[key] = value;
+                }
+            }
+        }
+    }
 
     test("normalizeHeaders preserves tuples, records and Headers", () => {
         const fromRecord = normalizeHeaders({
@@ -127,16 +155,50 @@ describe("fetch.ts weblike API", () => {
         }
     });
 
-    test("redirects are not auto-followed by the low-level implementation", async () => {
+    test("redirects follow by default and annotate the final response", async () => {
         const fetchLike = createFetch();
 
         try {
             const response = await fetchLike(`${testServer.baseUrl}/redirect`);
+            expect(response.status).toBe(200);
+            expect(response.redirected).toBe(true);
+            expect(response.url).toBe(
+                `${testServer.baseUrl}/redirected-target`,
+            );
+            expect(await response.text()).toBe("You followed the redirect");
+        } finally {
+            await fetchLike.close();
+        }
+    });
+
+    test("redirect mode manual returns the original redirect response", async () => {
+        const fetchLike = createFetch();
+
+        try {
+            const response = await fetchLike(`${testServer.baseUrl}/redirect`, {
+                redirect: "manual",
+            });
             expect(response.status).toBe(302);
+            expect(response.redirected).toBe(false);
+            expect(response.url).toBe(`${testServer.baseUrl}/redirect`);
             expect(response.headers.get("location")).toBe("/redirected-target");
             expect(await response.text()).toBe(
                 "Redirecting to /redirected-target",
             );
+        } finally {
+            await fetchLike.close();
+        }
+    });
+
+    test("redirect mode error rejects with TypeError", async () => {
+        const fetchLike = createFetch();
+
+        try {
+            await expect(
+                fetchLike(`${testServer.baseUrl}/redirect`, {
+                    redirect: "error",
+                }),
+            ).rejects.toBeInstanceOf(TypeError);
         } finally {
             await fetchLike.close();
         }
@@ -184,6 +246,73 @@ describe("fetch.ts weblike API", () => {
         try {
             await expect(
                 fetchLike("http://127.0.0.1:1/"),
+            ).rejects.toBeInstanceOf(TypeError);
+        } finally {
+            await fetchLike.close();
+        }
+    });
+
+    test("environment proxies are used when no explicit proxy is provided", async () => {
+        const fetchLike = createFetch();
+
+        try {
+            await withEnv(
+                {
+                    HTTP_PROXY: "http://127.0.0.1:1",
+                    HTTPS_PROXY: undefined,
+                    SOCKS5_PROXY: undefined,
+                    SOCKS_PROXY: undefined,
+                },
+                async () => {
+                    await expect(
+                        fetchLike(`${testServer.baseUrl}/text`),
+                    ).rejects.toBeInstanceOf(TypeError);
+                },
+            );
+        } finally {
+            await fetchLike.close();
+        }
+    });
+
+    test("proxy: null disables environment proxy resolution", async () => {
+        const fetchLike = createFetch();
+
+        try {
+            await withEnv(
+                {
+                    HTTP_PROXY: "http://127.0.0.1:1",
+                    HTTPS_PROXY: undefined,
+                    SOCKS5_PROXY: undefined,
+                    SOCKS_PROXY: undefined,
+                },
+                async () => {
+                    const response = await fetchLike(
+                        `${testServer.baseUrl}/text`,
+                        {
+                            proxy: null,
+                        },
+                    );
+                    expect(response.status).toBe(200);
+                    expect(await response.text()).toBe("Hello, World!");
+                },
+            );
+        } finally {
+            await fetchLike.close();
+        }
+    });
+
+    test("proxy accepts ProxyInfo objects directly", async () => {
+        const fetchLike = createFetch();
+
+        try {
+            await expect(
+                fetchLike(`${testServer.baseUrl}/text`, {
+                    proxy: {
+                        protocol: "http",
+                        host: "127.0.0.1",
+                        port: 1,
+                    },
+                }),
             ).rejects.toBeInstanceOf(TypeError);
         } finally {
             await fetchLike.close();

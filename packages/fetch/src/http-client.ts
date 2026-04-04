@@ -1,36 +1,88 @@
 import { createAgentPool } from "./agent-pool";
-import type { AgentPool, AgentPoolOptions, SendOptions } from "./types/agent";
+import type { Agent, AgentPool } from "./types/agent";
 
+/**
+ * Advanced HTTP client with per-origin pooling and explicit lifecycle control.
+ *
+ * @remarks
+ * Use this API when you want direct access to the library's richer error model and
+ * transport options instead of the fetch-like compatibility layer.
+ *
+ *
+ * @example
+ * ```ts
+ * const client = new HttpClient();
+ * const response = await client.send({
+ *   url: "https://httpbin.org/anything",
+ *   method: "GET",
+ * });
+ * await client.close();
+ * ```
+ */
 export class HttpClient implements AsyncDisposable {
     readonly #agentPools = new Map<string, AgentPool>();
     readonly #agentPoolOptions: Readonly<HttpClient.Options>;
+    #closePromise?: Promise<void>;
 
     constructor(options: HttpClient.Options = {}) {
         this.#agentPoolOptions = { ...options };
     }
 
-    async send(options: SendOptions): Promise<Response> {
+    get options(): Readonly<HttpClient.Options> {
+        return this.#agentPoolOptions;
+    }
+
+    async send(options: Agent.SendOptions): Promise<Response> {
         const agentPool = this.#getOrCreateAgentPool(options.url);
         return agentPool.send(options);
     }
 
+    /**
+     * Closes all pooled connections owned by this client.
+     *
+     * @remarks
+     * After closing, future requests may recreate pools as needed.
+     */
     async close(): Promise<void> {
-        const entries = Array.from(this.#agentPools.entries());
+        if (this.#closePromise) {
+            return this.#closePromise;
+        }
 
-        const results = await Promise.allSettled(
-            entries.map(([origin, agentPool]) =>
-                agentPool.close().then(() => {
-                    this.#agentPools.delete(origin);
+        const promise = (async () => {
+            const entries = Array.from(this.#agentPools.entries());
+
+            const results = await Promise.allSettled(
+                entries.map(async ([origin, agentPool]) => {
+                    try {
+                        await agentPool.close();
+                    } finally {
+                        this.#agentPools.delete(origin);
+                    }
                 }),
-            ),
-        );
+            );
 
-        const failed = results.find(
-            (r): r is PromiseRejectedResult => r.status === "rejected",
-        );
+            const errors = results.flatMap((result) =>
+                result.status === "rejected" ? [result.reason] : [],
+            );
 
-        if (failed) {
-            throw failed.reason;
+            if (errors.length === 1) throw errors[0];
+
+            if (errors.length > 1) {
+                throw new AggregateError(
+                    errors,
+                    "Failed to close one or more agent pools",
+                );
+            }
+        })();
+
+        this.#closePromise = promise;
+
+        try {
+            await promise;
+        } finally {
+            if (this.#closePromise === promise) {
+                this.#closePromise = undefined;
+            }
         }
     }
 
@@ -53,16 +105,7 @@ export class HttpClient implements AsyncDisposable {
 }
 
 export namespace HttpClient {
-    /**
-     * High-level client configuration.
-     *
-     * At this layer, the API exposes:
-     * - pool management options
-     * - socket connection options
-     * - HTTP reader/writer options forwarded to the agent I/O layer
-     */
-    export interface Options extends AgentPoolOptions {}
+    export interface Options extends AgentPool.Options {}
 }
 
-/** Back-compat */
 export interface HttpClientOptions extends HttpClient.Options {}

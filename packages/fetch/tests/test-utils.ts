@@ -270,6 +270,54 @@ export function createTestServer(): TestServer {
                     return textResponse("You followed the redirect");
                 }
 
+                case "/multipart-echo": {
+                    let fields: Record<string, unknown>;
+
+                    try {
+                        const formData = await request.formData();
+                        fields = {};
+
+                        for (const [key, value] of formData.entries()) {
+                            const v = value as unknown;
+
+                            if (v instanceof Blob) {
+                                fields[key] = {
+                                    type: "file",
+                                    filename:
+                                        "name" in v
+                                            ? String((v as any).name)
+                                            : "blob",
+                                    mimeType: (v as Blob).type,
+                                    size: (v as Blob).size,
+                                    content: await (v as Blob).text(),
+                                };
+                            } else {
+                                const existing = fields[key];
+                                fields[key] =
+                                    existing !== undefined
+                                        ? [
+                                              ...(Array.isArray(existing)
+                                                  ? existing
+                                                  : [existing]),
+                                              value,
+                                          ]
+                                        : value;
+                            }
+                        }
+                    } catch (err) {
+                        return json({ error: String(err) }, { status: 400 });
+                    }
+
+                    return json({
+                        method: request.method,
+                        contentType: request.headers.get("content-type"),
+                        contentLength: request.headers.get("content-length")
+                            ? Number(request.headers.get("content-length"))
+                            : null,
+                        fields,
+                    });
+                }
+
                 default: {
                     return textResponse("Not Found", { status: 404 });
                 }

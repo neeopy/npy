@@ -1,13 +1,15 @@
 import { randomBytes } from "node:crypto";
 import { Readable } from "node:stream";
 import { isAnyArrayBuffer } from "node:util/types";
-import { nodeReadableToWeb } from "@fuman/node";
+import type { IClosable, IReadable } from "@fuman/io";
+import { webReadableToFuman } from "@fuman/io";
 import { utf8 } from "@fuman/utils";
 import { CRLF_LENGTH, CRLF_STR } from "./_internal/consts";
 import {
     type FormDataPolyfill,
     isBlob,
     isFormData,
+    isFumanReadable,
     isIterable,
     isMultipartFormDataStream,
     isReadable,
@@ -18,12 +20,19 @@ import {
 export type BodyInit =
     | Exclude<RequestInit["body"], undefined | null>
     | FormDataPolyfill
-    | Readable;
+    | Readable
+    | (IReadable & IClosable);
 
 export interface BodyState {
     contentLength: number | null;
     contentType: string | null;
-    body: Readable | ReadableStream | Uint8Array | null;
+
+    body:
+        | Readable
+        | ReadableStream
+        | Uint8Array
+        | (IReadable & IClosable)
+        | null;
 }
 
 type Bytes = Uint8Array<ArrayBufferLike>;
@@ -70,7 +79,6 @@ async function* generatorOfFormData(
                 getFormHeader(boundary, name, value),
             ) as Bytes;
 
-            // ReadableStream -> AsyncIterable (via for-await, supported in modern runtimes; cast keeps TS happy)
             for await (const chunk of value.stream() as any as AsyncIterable<Bytes>) {
                 yield chunk;
             }
@@ -87,7 +95,12 @@ async function* generatorOfFormData(
 
 export const extractBody = (object: BodyInit | null): BodyState => {
     let type: string | null = null;
-    let body: Readable | ReadableStream | Uint8Array | null;
+    let body:
+        | Readable
+        | ReadableStream
+        | Uint8Array
+        | (IReadable & IClosable)
+        | null;
     let size: number | null = null;
 
     if (object == null) {
@@ -124,6 +137,8 @@ export const extractBody = (object: BodyInit | null): BodyState => {
         size = bytes.byteLength;
     } else if (isReadableStream(object)) {
         body = object;
+    } else if (isFumanReadable(object)) {
+        body = object;
     } else if (isFormData(object)) {
         const boundary = makeFormBoundary();
         type = `multipart/form-data; boundary=${boundary}`;
@@ -151,92 +166,14 @@ export const extractBody = (object: BodyInit | null): BodyState => {
     };
 };
 
-const kBodyInternals = Symbol("kBodyInternals");
-
-const toWebBodyInit = (
-    body: Readable | ReadableStream | Uint8Array | null,
-): globalThis.BodyInit | null => {
-    if (body == null) return null;
-    if (isReadable(body)) {
-        return nodeReadableToWeb(body);
-    }
-    return body as unknown as globalThis.BodyInit;
-};
-
-const bytesToArrayBuffer = (bytes: Uint8Array): ArrayBuffer => {
-    const bytesAsArrayBuffer = new ArrayBuffer(bytes.byteLength);
-    const bytesUint8 = new Uint8Array(bytesAsArrayBuffer);
-    bytesUint8.set(bytes);
-    return bytesAsArrayBuffer;
-};
-
-export class Body {
-    private [kBodyInternals]: BodyState;
-
-    constructor(init: BodyInit | null) {
-        this[kBodyInternals] = extractBody(init);
+export function fromRequestBody(request: Request): BodyInit | null {
+    if (request.bodyUsed) {
+        throw new TypeError("Request body has already been used");
     }
 
-    get body() {
-        return this[kBodyInternals].body;
+    if (request.body == null) {
+        return null;
     }
 
-    get bodyUsed() {
-        const { body } = this[kBodyInternals];
-        if (isReadable(body)) return Readable.isDisturbed(body);
-        if (isReadableStream(body)) return body.locked;
-        return false;
-    }
-
-    async arrayBuffer(): Promise<ArrayBuffer> {
-        const { body } = this[kBodyInternals];
-        if (body == null) return new ArrayBuffer(0);
-        if (body instanceof Uint8Array) return bytesToArrayBuffer(body);
-        return new Response(toWebBodyInit(body)).arrayBuffer();
-    }
-
-    async formData() {
-        const { body, contentLength, contentType } = this[kBodyInternals];
-        const headers: Record<string, string> = {};
-        if (contentLength != null)
-            headers["Content-Length"] = String(contentLength);
-        if (contentType != null) headers["Content-Type"] = contentType;
-        return new Response(toWebBodyInit(body), { headers }).formData();
-    }
-
-    async blob() {
-        const { body, contentType } = this[kBodyInternals];
-        if (body == null) {
-            return new Blob([], { type: contentType ?? "" });
-        }
-        if (body instanceof Uint8Array) {
-            return new Blob(
-                [
-                    new Uint8Array(
-                        body.buffer as ArrayBuffer,
-                        body.byteOffset,
-                        body.byteLength,
-                    ),
-                ],
-                { type: contentType ?? "" },
-            );
-        }
-        return new Response(toWebBodyInit(body), {
-            headers: contentType ? { "Content-Type": contentType } : undefined,
-        }).blob();
-    }
-
-    async json() {
-        const text = await this.text();
-        return JSON.parse(text);
-    }
-
-    async text() {
-        const { body } = this[kBodyInternals];
-        if (body == null) return "";
-        if (body instanceof Uint8Array) {
-            return utf8.decoder.decode(body);
-        }
-        return new Response(toWebBodyInit(body)).text();
-    }
+    return webReadableToFuman(request.body);
 }

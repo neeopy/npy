@@ -1,4 +1,4 @@
-import { HttpClient } from "../src/http-client.ts";
+import { HttpClient } from "../src/http-client";
 
 const client = new HttpClient({
     poolMaxPerHost: 32,

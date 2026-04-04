@@ -1,8 +1,8 @@
 import type { ISyncWritable, IWritable } from "@fuman/io";
-import { Bytes, write as ioWrite } from "@fuman/io";
+import { Bytes, fumanReadableToWeb, write as ioWrite } from "@fuman/io";
 import { nodeReadableToWeb } from "@fuman/node";
 import { CRLF_STR } from "../_internal/consts";
-import { isReadableStream } from "../_internal/guards";
+import { isFumanReadable, isReadableStream } from "../_internal/guards";
 import { bytesToStream } from "../_internal/streams";
 import { type BodyInit, extractBody } from "../body";
 import { createEncoders, encodeStream } from "../encoding";
@@ -26,7 +26,7 @@ type RequestHead = {
 
 export namespace Writers {
     export interface Options {
-        highWaterMark?: number;
+        writeBufferSize?: number;
         directWriteThreshold?: number;
         coalesceBodyMaxBytes?: number;
     }
@@ -87,6 +87,14 @@ function prepareBody(headers: Headers, init: BodyInit | null): PreparedBody {
         };
     }
 
+    if (isFumanReadable(body)) {
+        return {
+            kind: "stream",
+            stream: fumanReadableToWeb(body) as ByteStream,
+            length: state.contentLength,
+        };
+    }
+
     return {
         kind: "stream",
         stream: nodeReadableToWeb(body) as ByteStream,
@@ -136,7 +144,7 @@ function finalizeDelimitation(
 }
 
 function createBufferedConnWriter(dst: Destination, opts: Writers.Options) {
-    const bufferSize = opts.highWaterMark ?? 16 * 1024;
+    const bufferSize = opts.writeBufferSize ?? 16 * 1024;
     const directWriteThreshold = opts.directWriteThreshold ?? 64 * 1024;
     const bufWriter = new BufWriter(dst, bufferSize);
 
@@ -235,7 +243,7 @@ export function createRequestWriter(
     dst: Destination,
     opts: Writers.Options = {},
 ): Writers.Writer {
-    const scratch = Bytes.alloc(opts.highWaterMark ?? 16 * 1024);
+    const scratch = Bytes.alloc(opts.writeBufferSize ?? 16 * 1024);
 
     const write = async (req: Writers.Request): Promise<void> => {
         if (req.signal?.aborted)

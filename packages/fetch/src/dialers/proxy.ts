@@ -13,8 +13,9 @@ const DEFAULT_HTTP_ALPN_PROTOCOLS = ["http/1.1"] as const;
 
 type ProxyConnectOptions = Parameters<typeof connectTcp>[0];
 type UpgradableTcpConnection = Parameters<typeof upgradeTls>[0];
+type ResolvedProxy = Parameters<typeof createProxyConnection>[0]["proxy"];
 
-function normalizeProxy(proxy: ProxyDialer.Input): ProxyDialer.Proxy {
+function normalizeProxy(proxy: ProxyDialer.Input): ResolvedProxy {
     if (typeof proxy !== "string") {
         return proxy;
     }
@@ -27,8 +28,15 @@ function normalizeProxy(proxy: ProxyDialer.Input): ProxyDialer.Proxy {
     return parsed;
 }
 
+/**
+ * Dialer that routes connections through an HTTP, HTTPS or SOCKS proxy.
+ *
+ * @remarks
+ * Secure targets are tunneled and then upgraded to TLS after the proxy connection
+ * has been established.
+ */
 export class ProxyDialer implements Dialer {
-    readonly proxy: ProxyDialer.Proxy;
+    readonly proxy: ResolvedProxy;
     readonly #options: Readonly<ProxyDialer.Options>;
     readonly #connectThroughProxy: ProxyConnectionFn<ProxyConnectOptions>;
 
@@ -83,9 +91,7 @@ export class ProxyDialer implements Dialer {
 }
 
 export namespace ProxyDialer {
-    export type Proxy = Parameters<typeof createProxyConnection>[0]["proxy"];
-
-    export type Input = string | Proxy | ProxyInfo;
+    export type Input = string | ProxyInfo;
 
     export interface Options {
         caCerts?: string[];

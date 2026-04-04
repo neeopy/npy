@@ -2,12 +2,7 @@ import { createPool } from "generic-pool";
 import { createAgent } from "./agent";
 import { AutoDialer } from "./dialers";
 import { UnsupportedProtocolError } from "./errors";
-import type {
-    Agent,
-    AgentPool,
-    AgentPoolOptions,
-    SendOptions,
-} from "./types/agent";
+import type { Agent, AgentPool } from "./types/agent";
 
 const defaultEvictionInterval = 10_000;
 const defaultMax = Number.MAX_SAFE_INTEGER;
@@ -15,7 +10,7 @@ const defaultIdleTimeout = 30_000;
 
 export function createAgentPool(
     baseUrl: string,
-    options: AgentPoolOptions = {},
+    options: AgentPool.Options = {},
 ): AgentPool {
     const poolUrl = new URL(baseUrl);
 
@@ -73,28 +68,20 @@ export function createAgentPool(
     );
 
     let releaseAgentFns: Array<(forceClose?: boolean) => Promise<void>> = [];
+    let closePromise: Promise<void> | undefined;
 
-    async function send(sendOptions: SendOptions): Promise<Response> {
+    async function send(sendOptions: Agent.SendOptions): Promise<Response> {
         let agent: Agent | undefined;
         let agentReleased = false;
 
         const releaseAgentFn = async (forceClose = false) => {
-            if (!agent || agentReleased) {
-                return;
-            }
-
+            if (!agent || agentReleased) return;
             agentReleased = true;
             releaseAgentFns = releaseAgentFns.filter(
-                (r) => r !== releaseAgentFn,
+                (release) => release !== releaseAgentFn,
             );
-
-            if (forceClose) {
-                agent.close();
-            }
-
-            if (pool.isBorrowedResource(agent)) {
-                await pool.release(agent);
-            }
+            if (forceClose) agent.close();
+            if (pool.isBorrowedResource(agent)) await pool.release(agent);
         };
 
         releaseAgentFns.push(releaseAgentFn);
@@ -115,10 +102,45 @@ export function createAgentPool(
         }
     }
 
-    async function close() {
-        await Promise.all(releaseAgentFns.map((release) => release(true)));
-        await pool.drain();
-        await pool.clear();
+    async function close(): Promise<void> {
+        if (closePromise) return closePromise;
+
+        const promise = (async () => {
+            const pendingReleases = releaseAgentFns;
+            releaseAgentFns = [];
+
+            const results = await Promise.allSettled([
+                ...pendingReleases.map((release) => release(true)),
+                (async () => {
+                    try {
+                        await pool.drain();
+                    } finally {
+                        await pool.clear();
+                    }
+                })(),
+            ]);
+
+            const errors = results.flatMap((result) =>
+                result.status === "rejected" ? [result.reason] : [],
+            );
+
+            if (errors.length === 1) throw errors[0];
+
+            if (errors.length > 1) {
+                throw new AggregateError(
+                    errors,
+                    "Failed to close agent pool cleanly",
+                );
+            }
+        })();
+
+        closePromise = promise;
+
+        try {
+            await promise;
+        } finally {
+            if (closePromise === promise) closePromise = undefined;
+        }
     }
 
     return {

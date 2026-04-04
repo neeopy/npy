@@ -1,7 +1,7 @@
 {
     "compilerOptions": {
         "target": "esnext",
-        "lib": ["esnext", "dom", "dom.iterable", "WebWorker"],
+        "lib": ["esnext", "dom", "dom.iterable", "dom.asynciterable"],
         "useDefineForClassFields": true,
         "module": "ESNext",
         "moduleResolution": "Bundler",

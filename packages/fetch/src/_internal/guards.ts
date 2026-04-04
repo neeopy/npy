@@ -1,4 +1,5 @@
 import { Readable } from "node:stream";
+import type { IClosable, IReadable } from "@fuman/io";
 
 export interface FormDataPolyfill extends Readable {
     getBoundary(): string;
@@ -7,7 +8,7 @@ export interface FormDataPolyfill extends Readable {
 }
 
 export const isReadable = (object: any): object is Readable =>
-    Readable.isReadable(object);
+    Boolean(Readable.isReadable(object));
 
 export const isIterable = (
     object: any,
@@ -21,7 +22,7 @@ export const isMultipartFormDataStream = (
     typeof object?.getBoundary === "function" &&
     typeof object?.hasKnownLength === "function" &&
     typeof object?.getLengthSync === "function" &&
-    Readable.isReadable(object);
+    Boolean(Readable.isReadable(object));
 
 export const isFormData = (object: any): object is FormData =>
     typeof object === "object" &&
@@ -53,19 +54,25 @@ export const isReadableStream = (object: any): object is ReadableStream =>
     typeof object?.cancel === "function" &&
     typeof object?.tee === "function";
 
+export const isFumanReadable = (object: any): object is IReadable & IClosable =>
+    typeof object?.read === "function" &&
+    typeof object?.close === "function" &&
+    !isReadable(object) &&
+    !isReadableStream(object);
+
 export const isBlob = (object: any): object is Blob => {
     if (
         typeof object === "object" &&
-        typeof object?.arrayBuffer === "function" &&
-        typeof object?.type === "string" &&
-        typeof object?.stream === "function" &&
-        typeof object?.constructor === "function"
+        object !== null &&
+        typeof object.arrayBuffer === "function" &&
+        typeof object.size === "number" &&
+        typeof object.slice === "function" &&
+        typeof object.stream === "function" &&
+        typeof object.text === "function" &&
+        typeof object.type === "string"
     ) {
-        const tag = object[Symbol.toStringTag];
-        return (
-            typeof tag === "string" &&
-            (tag.startsWith("Blob") || tag.startsWith("File"))
-        );
+        return true;
     }
+
     return false;
 };

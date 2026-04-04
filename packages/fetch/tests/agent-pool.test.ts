@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { createAgentPool } from "../src/agent-pool.ts";
-import { RequestAbortedError } from "../src/errors.ts";
-import { createTestServer } from "./test-utils.ts";
+import { createAgentPool } from "../src/agent-pool";
+import { RequestAbortedError } from "../src/errors";
+import { createTestServer } from "./test-utils";
 
 describe("agent-pool.ts", () => {
     const testServer = createTestServer();

@@ -3,9 +3,9 @@ import {
     ResponseBodyError,
     ResponseDecodeError,
     ResponseHeaderError,
-} from "../src/errors.ts";
-import { HttpClient } from "../src/fetch.ts";
-import { createTestServer } from "./test-utils.ts";
+} from "../src/errors";
+import { HttpClient } from "../src/fetch";
+import { createTestServer } from "./test-utils";
 
 describe("high-level I/O options", () => {
     const testServer = createTestServer();

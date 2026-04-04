@@ -12,7 +12,7 @@ import {
     ResponseBodyError,
     ResponseHeaderError,
     UnsupportedMethodError,
-} from "../src/errors.ts";
+} from "../src/errors";
 
 describe("errors.ts", () => {
     test("base FetchError exposes code, phase, retryable and cause", () => {

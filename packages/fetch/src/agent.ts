@@ -1,10 +1,7 @@
 import { Deferred } from "@fuman/utils";
-import {
-    mapAdvancedConnectError,
-    mapAdvancedSendError,
-    wrapResponseBodyErrors,
-} from "./_internal/error-adapters";
+import { toConnectError, toSendError } from "./_internal/error-mapping";
 import { raceSignal } from "./_internal/promises";
+import { bodyErrorMapperSymbol } from "./_internal/symbols";
 import {
     AgentBusyError,
     AgentClosedError,
@@ -15,8 +12,8 @@ import {
     UnsupportedProtocolError,
 } from "./errors";
 import { readResponse, writeRequest } from "./io/io";
-import type { Agent, SendOptions } from "./types/agent";
-import type { ConnectionLike, Dialer, DialTarget } from "./types/dialer";
+import type { Agent } from "./types/agent";
+import type { Dialer } from "./types/dialer";
 
 const PORT_MAP = {
     "http:": 80,
@@ -36,8 +33,8 @@ function withSignal<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
 }
 
 function isTlsConnection(
-    conn: ConnectionLike,
-): conn is ConnectionLike & { getAlpnProtocol(): string | null } {
+    conn: Dialer.ConnectionLike,
+): conn is Dialer.ConnectionLike & { getAlpnProtocol(): string | null } {
     return (
         "getAlpnProtocol" in conn && typeof conn.getAlpnProtocol === "function"
     );
@@ -70,7 +67,7 @@ export function createAgent(
         throw new TypeError(`Invalid port in base URL: ${baseUrl}`);
     }
 
-    const target: DialTarget = {
+    const target: Dialer.Target = {
         address: hostname,
         port,
         secure,
@@ -82,8 +79,8 @@ export function createAgent(
     const readerOptions = options.io?.reader ?? {};
     const writerOptions = options.io?.writer ?? {};
 
-    let conn: ConnectionLike | undefined;
-    let connectPromise: Promise<ConnectionLike> | undefined;
+    let conn: Dialer.ConnectionLike | undefined;
+    let connectPromise: Promise<Dialer.ConnectionLike> | undefined;
 
     let closed = false;
     let isBusy = false;
@@ -116,9 +113,7 @@ export function createAgent(
     function disposeConn(): void {
         const current = conn;
         conn = undefined;
-
         if (!current) return;
-
         try {
             current.close();
         } catch {}
@@ -128,16 +123,11 @@ export function createAgent(
         if (closed) return;
         closed = true;
         disposeConn();
-
-        if (!isBusy) {
-            markIdle();
-        }
+        if (!isBusy) markIdle();
     }
 
     function assertUsable(): void {
-        if (closed) {
-            throw new AgentClosedError(createBaseErrorContext());
-        }
+        if (closed) throw new AgentClosedError(createBaseErrorContext());
     }
 
     function assertSameOrigin(url: URL): void {
@@ -149,46 +139,36 @@ export function createAgent(
         }
     }
 
-    function configureConnection(nextConn: ConnectionLike): void {
+    function configureConnection(nextConn: Dialer.ConnectionLike): void {
         nextConn.setNoDelay(connectOptions.noDelay ?? true);
-
         if (connectOptions.keepAlive !== null) {
             nextConn.setKeepAlive(connectOptions.keepAlive ?? true);
         }
     }
 
-    async function connect(signal?: AbortSignal): Promise<ConnectionLike> {
+    async function connect(
+        signal?: AbortSignal,
+    ): Promise<Dialer.ConnectionLike> {
         assertUsable();
-
         if (conn) return conn;
         if (connectPromise) return withSignal(connectPromise, signal);
 
         let timedOut = false;
         let timeoutId: ReturnType<typeof setTimeout> | undefined;
-
         const abortController = new AbortController();
 
-        const onAbort = () => {
-            abortController.abort(signal?.reason);
-        };
-
+        const onAbort = () => abortController.abort(signal?.reason);
         const cleanup = () => {
             if (timeoutId !== undefined) {
                 clearTimeout(timeoutId);
                 timeoutId = undefined;
             }
-
-            if (signal) {
-                signal.removeEventListener("abort", onAbort);
-            }
+            if (signal) signal.removeEventListener("abort", onAbort);
         };
 
         if (signal) {
-            if (signal.aborted) {
-                abortController.abort(signal.reason);
-            } else {
-                signal.addEventListener("abort", onAbort, { once: true });
-            }
+            if (signal.aborted) abortController.abort(signal.reason);
+            else signal.addEventListener("abort", onAbort, { once: true });
         }
 
         if (
@@ -214,7 +194,6 @@ export function createAgent(
                     try {
                         nextConn.close();
                     } catch {}
-
                     throw new AgentClosedError(createBaseErrorContext());
                 }
 
@@ -226,7 +205,6 @@ export function createAgent(
                         try {
                             nextConn.close();
                         } catch {}
-
                         throw new UnsupportedAlpnProtocolError(
                             alpn,
                             createBaseErrorContext(),
@@ -237,7 +215,7 @@ export function createAgent(
                 conn = nextConn;
                 return nextConn;
             } catch (error) {
-                throw mapAdvancedConnectError(error, {
+                throw toConnectError(error, {
                     signal,
                     timedOut,
                     context: createBaseErrorContext(),
@@ -251,7 +229,10 @@ export function createAgent(
         return withSignal(connectPromise, signal);
     }
 
-    async function send(sendOptions: SendOptions): Promise<Response> {
+    async function executeRequest(
+        sendOptions: Agent.SendOptions,
+        mapBodyError?: (err: unknown) => unknown,
+    ): Promise<Response> {
         assertUsable();
 
         const url =
@@ -268,46 +249,34 @@ export function createAgent(
                 errorContext,
             );
         }
-
-        if (isBusy) {
-            throw new AgentBusyError(errorContext);
-        }
-
+        if (isBusy) throw new AgentBusyError(errorContext);
         assertSameOrigin(url);
-
-        if (method === "CONNECT") {
+        if (method === "CONNECT")
             throw new UnsupportedMethodError("CONNECT", errorContext);
-        }
 
         isBusy = true;
         idleDeferred = new Deferred<void>();
 
         let finalized = false;
-        let activeConn: ConnectionLike | undefined;
+        let activeConn: Dialer.ConnectionLike | undefined;
 
         const finalize = (reusable: boolean) => {
             if (finalized) return;
             finalized = true;
-
             if (!reusable || closed) {
-                if (conn === activeConn) {
-                    disposeConn();
-                } else if (activeConn) {
+                if (conn === activeConn) disposeConn();
+                else if (activeConn) {
                     try {
                         activeConn.close();
                     } catch {}
                 }
             }
-
             markIdle();
         };
 
         const abortListener = () => {
             if (activeConn) {
-                if (conn === activeConn) {
-                    conn = undefined;
-                }
-
+                if (conn === activeConn) conn = undefined;
                 try {
                     activeConn.close();
                 } catch {}
@@ -337,7 +306,7 @@ export function createAgent(
                     sendOptions.signal,
                 );
             } catch (error) {
-                throw mapAdvancedSendError(error, {
+                throw toSendError(error, {
                     signal: sendOptions.signal,
                     context: errorContext,
                     phase: "request",
@@ -366,32 +335,24 @@ export function createAgent(
                             );
                             finalize(reusable);
                         },
+                        mapBodyError,
                     ),
                     sendOptions.signal,
                 );
             } catch (error) {
-                throw mapAdvancedSendError(error, {
+                throw toSendError(error, {
                     signal: sendOptions.signal,
                     context: errorContext,
                     phase: "response",
                 });
             }
 
-            return wrapResponseBodyErrors(response, (error) =>
-                mapAdvancedSendError(error, {
-                    signal: sendOptions.signal,
-                    context: errorContext,
-                    phase: "body",
-                }),
-            );
+            return response;
         } catch (error) {
             sendOptions.signal?.removeEventListener("abort", abortListener);
 
             if (activeConn) {
-                if (conn === activeConn) {
-                    conn = undefined;
-                }
-
+                if (conn === activeConn) conn = undefined;
                 try {
                     activeConn.close();
                 } catch {}
@@ -400,6 +361,32 @@ export function createAgent(
             finalize(false);
             throw error;
         }
+    }
+
+    async function send(sendOptions: Agent.SendOptions): Promise<Response> {
+        const url =
+            typeof sendOptions.url === "string"
+                ? new URL(sendOptions.url)
+                : sendOptions.url;
+        const errorContext = createRequestErrorContext(
+            url,
+            sendOptions.method.toUpperCase(),
+        );
+
+        const mapBodyError =
+            (
+                sendOptions as {
+                    [bodyErrorMapperSymbol]?: (err: unknown) => unknown;
+                }
+            )[bodyErrorMapperSymbol] ??
+            ((error: unknown) =>
+                toSendError(error, {
+                    signal: sendOptions.signal,
+                    context: errorContext,
+                    phase: "body",
+                }));
+
+        return executeRequest(sendOptions, mapBodyError);
     }
 
     return {

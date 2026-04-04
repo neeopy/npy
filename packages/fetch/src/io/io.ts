@@ -34,11 +34,118 @@ function parseStatusLine(line: string) {
     return { major, minor, status, statusText: m[4] ?? "" };
 }
 
+function toArrayBufferBytes(
+    bytes: Uint8Array<ArrayBufferLike>,
+): Uint8Array<ArrayBuffer> {
+    if (bytes.buffer instanceof ArrayBuffer) {
+        return bytes as Uint8Array<ArrayBuffer>;
+    }
+    return new Uint8Array(bytes);
+}
+
+function wrapStreamErrors(
+    source: ReadableStream<Uint8Array>,
+    mapError: (err: unknown) => unknown,
+): ReadableStream<Uint8Array> {
+    const reader = source.getReader();
+    let pending: Uint8Array | null = null;
+
+    return new ReadableStream({
+        type: "bytes",
+        async pull(controller) {
+            try {
+                const byob = controller.byobRequest;
+
+                if (byob?.view) {
+                    const target = new Uint8Array(
+                        byob.view.buffer,
+                        byob.view.byteOffset,
+                        byob.view.byteLength,
+                    );
+
+                    if (target.byteLength === 0) {
+                        byob.respond(0);
+                        return;
+                    }
+
+                    let written = 0;
+
+                    if (pending && pending.byteLength > 0) {
+                        const n = Math.min(
+                            target.byteLength,
+                            pending.byteLength,
+                        );
+                        target.set(pending.subarray(0, n), written);
+                        written += n;
+                        pending =
+                            n === pending.byteLength
+                                ? null
+                                : pending.subarray(n);
+                    }
+
+                    while (written === 0) {
+                        const { done, value } = await reader.read();
+
+                        if (done) {
+                            byob.respond(0);
+                            controller.close();
+                            return;
+                        }
+
+                        if (!value || value.byteLength === 0) continue;
+
+                        const n = Math.min(
+                            target.byteLength - written,
+                            value.byteLength,
+                        );
+                        target.set(value.subarray(0, n), written);
+                        written += n;
+
+                        if (n < value.byteLength) {
+                            pending = value.subarray(n);
+                        }
+                    }
+
+                    byob.respond(written);
+                    return;
+                }
+
+                if (pending && pending.byteLength > 0) {
+                    const chunk = pending;
+                    pending = null;
+                    controller.enqueue(toArrayBufferBytes(chunk));
+                    return;
+                }
+
+                const { done, value } = await reader.read();
+
+                if (done) {
+                    controller.close();
+                    return;
+                }
+
+                if (value && value.byteLength > 0) {
+                    controller.enqueue(toArrayBufferBytes(value));
+                }
+            } catch (error) {
+                controller.error(mapError(error));
+            }
+        },
+
+        async cancel(reason) {
+            pending = null;
+            await reader.cancel(reason);
+        },
+    });
+}
+
 export async function readResponse(
     conn: IConnection<unknown>,
     options: Readers.Options & LineReader.ReadHeadersOptions = {},
     shouldIgnoreBody: (status: number) => boolean,
     onDone?: (reusable: boolean) => void,
+
+    mapBodyError?: (err: unknown) => unknown,
 ): Promise<Response> {
     const lr = new LineReader(conn, options);
 
@@ -117,10 +224,10 @@ export async function readResponse(
 
     const reader: IReadable = chunked
         ? new ChunkedBodyReader(lr, options)
-        : new BodyReader(lr, contentLength ?? -1, options);
+        : new BodyReader(lr, contentLength, options);
 
-    const rawBody = new ReadableStream<Uint8Array>({
-        type: "bytes" as const,
+    const rawBody = new ReadableStream({
+        type: "bytes",
         async pull(controller: ReadableByteStreamController) {
             const byob = controller.byobRequest;
             const view = byob?.view
@@ -130,7 +237,7 @@ export async function readResponse(
                       byob.view.byteLength,
                   )
                 : new Uint8Array(
-                      new ArrayBuffer(options.highWaterMark ?? 16 * 1024),
+                      new ArrayBuffer(options.readChunkSize ?? 16 * 1024),
                   );
 
             try {
@@ -192,6 +299,10 @@ export async function readResponse(
         );
         if (maxDecoded != null) {
             body = body.pipeThrough(new MaxBytesTransformStream(maxDecoded));
+        }
+
+        if (mapBodyError != null) {
+            body = wrapStreamErrors(body, mapBodyError);
         }
     } catch (err) {
         finalize(false);

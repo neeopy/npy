@@ -6,7 +6,7 @@ const DEFAULT_TCP_PORT = 80;
 const DEFAULT_TLS_PORT = 443;
 const DEFAULT_HTTP_ALPN_PROTOCOLS = ["http/1.1"] as const;
 
-type HostPort = {
+export type HostPort = {
     address: string;
     port: number;
 };
@@ -32,6 +32,12 @@ function parsePort(value: string | number): number {
     return parsed;
 }
 
+/**
+ * Resolves the effective network address and port for a URL or dial target.
+ *
+ * @remarks
+ * When the input does not include an explicit port, the provided default port is used.
+ */
 export function resolveHostPort(
     target: URL | Dialer.Target,
     defaultPort: number,
@@ -50,6 +56,12 @@ export function resolveHostPort(
     return { address, port };
 }
 
+/**
+ * Dialer for plain TCP targets.
+ *
+ * @remarks
+ * This dialer rejects secure targets and is intended for HTTP over raw TCP.
+ */
 export class TcpDialer implements Dialer {
     async dial(
         target: Dialer.Target,
@@ -68,6 +80,13 @@ export class TcpDialer implements Dialer {
     }
 }
 
+/**
+ * Dialer for TLS targets.
+ *
+ * @remarks
+ * This dialer rejects insecure targets and applies TLS-specific options such as
+ * CA certificates, SNI and ALPN.
+ */
 export class TlsDialer implements Dialer {
     readonly #options: Readonly<TlsDialer.Options>;
 
@@ -113,6 +132,9 @@ export namespace TlsDialer {
     }
 }
 
+/**
+ * Selects {@link TcpDialer} or {@link TlsDialer} based on the target security mode.
+ */
 export class AutoDialer implements Dialer {
     readonly tcpDialer: TcpDialer;
     readonly tlsDialer: TlsDialer;

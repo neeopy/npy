@@ -12,7 +12,7 @@ import {
     TlsConnection,
 } from "@fuman/node";
 
-type WithSignal<T = {}> = T & { signal?: AbortSignal };
+export type WithSignal<T = {}> = T & { signal?: AbortSignal };
 
 type SocketLike = {
     on(event: string, handler: (...args: any[]) => void): void;

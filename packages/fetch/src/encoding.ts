@@ -1,9 +1,10 @@
 import { Readable } from "node:stream";
 import { nodeReadableToWeb } from "@fuman/node";
+import { DecodeStreamError } from "./_internal/decode-stream-error";
 
-type ByteStream = ReadableStream<Uint8Array>;
+export type ByteStream = ReadableStream<Uint8Array>;
 type ByteSource = ByteStream | AsyncIterable<Uint8Array>;
-type ByteTransform = TransformStream<Uint8Array, Uint8Array>;
+export type ByteTransform = TransformStream<Uint8Array, Uint8Array>;
 
 function applyTransforms(
     stream: ByteSource,
@@ -13,7 +14,6 @@ function applyTransforms(
     const transforms = factory(contentEncoding);
     if (transforms.length === 0) return stream;
 
-    // When transforms are required, always operate as Web Streams to use pipeThrough.
     let result: ByteStream;
 
     if (stream instanceof ReadableStream) {
@@ -29,6 +29,13 @@ function applyTransforms(
     return result;
 }
 
+/**
+ * Applies decoding transforms for the given content-encoding list.
+ *
+ * @remarks
+ * If no supported encodings are provided, the original source is returned unchanged.
+ * Async iterables are converted to Web Streams only when transforms are required.
+ */
 export function decodeStream(
     stream: ByteStream,
     contentEncoding?: string | string[],
@@ -44,6 +51,13 @@ export function decodeStream(
     return applyTransforms(stream, contentEncoding, createDecoders);
 }
 
+/**
+ * Applies encoding transforms for the given content-encoding list.
+ *
+ * @remarks
+ * If no supported encodings are provided, the original source is returned unchanged.
+ * Async iterables are converted to Web Streams only when transforms are required.
+ */
 export function encodeStream(
     stream: ByteStream,
     contentEncoding?: string | string[],
@@ -60,10 +74,11 @@ export function encodeStream(
 }
 
 /**
- * Create a series of decoding streams based on the content-encoding header. The
- * resulting streams should be piped together to decode the content.
+ * Creates the decoder pipeline for a Content-Encoding or transfer-coding list.
  *
- * @see {@link https://datatracker.ietf.org/doc/html/rfc9110#section-8.4.1}
+ * @remarks
+ * Decoding is applied in reverse order of encoding, as required by HTTP semantics.
+ * The special value `identity` is ignored.
  */
 export function createDecoders(
     contentEncoding?: string | string[],
@@ -78,25 +93,20 @@ export function createDecoders(
         for (const encoding of encodings) {
             const normalizedEncoding = normalizeEncoding(encoding);
 
-            // identity is not valid for Content-Encoding (it is for Accept-Encoding).
             if (normalizedEncoding === "identity") continue;
 
             decoders.push(createDecoder(normalizedEncoding));
         }
     }
 
-    // Decoding must be applied in reverse order of encoding.
     return decoders.reverse();
 }
 
 /**
- * Create a series of encoding streams based on the content-encoding header (or
- * transfer-coding list).
+ * Creates the encoder pipeline for a Content-Encoding or transfer-coding list.
  *
- * The resulting streams should be piped together to apply the encoding in the
- * declared order.
- *
- * @see {@link https://datatracker.ietf.org/doc/html/rfc9110#section-8.4.1}
+ * @remarks
+ * Encoders are returned in the declared order. The special value `identity` is ignored.
  */
 export function createEncoders(
     contentEncoding?: string | string[],
@@ -124,28 +134,64 @@ function commaSplit(header: string): string[] {
     return header.split(",");
 }
 
-function normalizeEncoding(encoding: string) {
-    // https://www.rfc-editor.org/rfc/rfc7231#section-3.1.2.1
-    // > All content-coding values are case-insensitive...
+function normalizeEncoding(encoding: string): string {
     return encoding.trim().toLowerCase();
+}
+
+function tagDecodeErrors(native: ByteTransform): ByteTransform {
+    const reader = native.readable.getReader();
+
+    const tagged = new ReadableStream<Uint8Array>({
+        pull(controller) {
+            return reader.read().then(
+                ({ done, value }) => {
+                    if (done) {
+                        controller.close();
+                    } else if (value) {
+                        controller.enqueue(
+                            value as unknown as Uint8Array<ArrayBuffer>,
+                        );
+                    }
+                },
+                (err) => {
+                    controller.error(new DecodeStreamError(err));
+                },
+            );
+        },
+        cancel(reason) {
+            return reader.cancel(reason);
+        },
+    });
+
+    return {
+        writable: native.writable,
+        readable: tagged,
+    } as ByteTransform;
 }
 
 function createDecoder(normalizedEncoding: string): ByteTransform {
     switch (normalizedEncoding) {
-        // https://www.rfc-editor.org/rfc/rfc9112.html#section-7.2
         case "gzip":
         case "x-gzip":
-            return new DecompressionStream("gzip") as ByteTransform;
+            return tagDecodeErrors(
+                new DecompressionStream("gzip") as ByteTransform,
+            );
         case "deflate":
         case "x-deflate":
-            return new DecompressionStream("deflate") as ByteTransform;
+            return tagDecodeErrors(
+                new DecompressionStream("deflate") as ByteTransform,
+            );
         case "zstd":
         case "x-zstd":
-            return new DecompressionStream("zstd" as any) as ByteTransform;
+            return tagDecodeErrors(
+                new DecompressionStream("zstd" as any) as ByteTransform,
+            );
         case "br":
-            return new DecompressionStream("brotli" as any) as ByteTransform;
+            return tagDecodeErrors(
+                new DecompressionStream("brotli" as any) as ByteTransform,
+            );
         case "identity":
-            return new TransformStream(); // Pass-through
+            return new TransformStream();
         default:
             throw new TypeError(
                 `Unsupported content-encoding: "${normalizedEncoding}"`,
@@ -167,7 +213,7 @@ function createEncoder(normalizedEncoding: string): ByteTransform {
         case "br":
             return new CompressionStream("brotli" as any) as ByteTransform;
         case "identity":
-            return new TransformStream(); // Pass-through
+            return new TransformStream();
         default:
             throw new TypeError(
                 `Unsupported content-encoding: "${normalizedEncoding}"`,

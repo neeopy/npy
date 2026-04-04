@@ -41,7 +41,7 @@ const proxyPatterns = [
 
 const proxyRegexes = proxyPatterns.map((pat) => new RegExp(pat, "i"));
 
-type ParseReturn<Opts extends ParseOptions | undefined> = Opts extends {
+export type ParseReturn<Opts extends ParseOptions | undefined> = Opts extends {
     strict: true;
 }
     ? ProxyInfo | null

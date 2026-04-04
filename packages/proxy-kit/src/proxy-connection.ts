@@ -9,7 +9,7 @@ import {
 } from "@fuman/net";
 import type { ProxyInfo, ProxyProtocol } from "./types";
 
-type ProxyProtocolLike = ProxyProtocol | "socks";
+export type ProxyProtocolLike = ProxyProtocol | "socks";
 
 type SocksProxyProtocol = "socks" | "socks4" | "socks4a" | "socks5" | "socks5h";
 
@@ -18,7 +18,7 @@ type EndpointOptions<TOptions extends TcpEndpoint> = Omit<
     keyof TcpEndpoint
 >;
 
-type ProxyWithAliasProtocol = Omit<ProxyInfo, "protocol"> & {
+export type ProxyWithAliasProtocol = Omit<ProxyInfo, "protocol"> & {
     readonly protocol: ProxyProtocolLike;
 };
 

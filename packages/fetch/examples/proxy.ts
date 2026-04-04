@@ -1,32 +1,16 @@
-import { ProxyDialer } from "../src/dialers/proxy";
-import { createFetch } from "../src/fetch";
-import { HttpClient } from "../src/http-client";
+import { fetch } from "../src/fetch";
 
-const proxyUrl = process.env.HTTP_PROXY as string;
+const proxyUrl = "http://V0rk3M:phA3fT@186.179.61.64:9183";
 
-const client = new HttpClient({
-    dialer: new ProxyDialer(proxyUrl),
-    poolMaxPerHost: 16,
-    poolMaxIdlePerHost: 4,
-    connect: {
-        keepAlive: true,
-        noDelay: true,
-    },
-});
+const response = await fetch("https://httpbin.org/ip", { proxy: proxyUrl });
 
-const fetch = createFetch(client);
-
-try {
-    const response = await fetch("https://httpbin.org/ip");
-
-    if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-    }
-
-    const data = await response.json();
-
-    console.log("proxy:", proxyUrl);
-    console.log("origin seen by server:", data.origin);
-} finally {
-    await client.close();
+if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
 }
+
+const data = await response.json();
+
+console.log("proxy:", proxyUrl);
+console.log("origin seen by server:", data.origin);
+
+await fetch.close();

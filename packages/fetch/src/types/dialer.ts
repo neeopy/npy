@@ -1,6 +1,9 @@
 import type { ITcpConnection, ITlsConnection } from "@fuman/net";
 import type { NodeTlsConnectOptions } from "@fuman/node";
 
+/**
+ * Transport abstraction responsible for opening a connection to an HTTP target.
+ */
 export interface Dialer {
     dial(
         target: Dialer.Target,

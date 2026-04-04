@@ -1,4 +1,4 @@
-import { fetch } from "../src/fetch.ts";
+import { fetch } from "../src/fetch";
 
 const response = await fetch("https://httpbin.org/anything");
 

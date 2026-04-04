@@ -1,7 +1,14 @@
+export type { FormDataPolyfill } from "./_internal/guards";
+export type { WithSignal } from "./_internal/net";
 export { connectTcp, connectTls, upgradeTls } from "./_internal/net";
+export * from "./agent";
+export * from "./agent-pool";
 export * from "./body";
 export * from "./dialers";
 export * from "./encoding";
 export * from "./errors";
 export * from "./fetch";
+export * from "./http-client";
+export type { LineReader, Readers } from "./io/readers";
+export type { Writers } from "./io/writers";
 export * from "./types";

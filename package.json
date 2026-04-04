@@ -5,9 +5,12 @@
     "version": "0.1.1",
     "license": "MIT",
     "scripts": {
-        "build": "bun run scripts/build-all.js",
+        "build:packages": "bun run scripts/build-all.js",
+        "docs": "bunx fuman-build typedoc",
+        "build": "bun run build:packages && bun run docs",
         "release": "fuman-build release",
-        "test": "bun test"
+        "test": "bun test",
+        "fix": "biome check --write"
     },
     "workspaces": [
         "packages/*"
@@ -15,6 +18,10 @@
     "repository": {
         "type": "git",
         "url": "git+https://github.com/neeopy/npy.git"
+    },
+    "homepage": "https://github.com/neeopy/npy",
+    "bugs": {
+        "url": "https://github.com/neeopy/npy/issues"
     },
     "peerDependencies": {
         "typescript": "^5"
@@ -24,7 +31,6 @@
         "@fuman/build": "https://pkg.pr.new/teidesu/fuman/@fuman/build@40da942",
         "@types/bun": "latest",
         "@types/node": "^25.5.0",
-        "dependency-cruiser": "^17.3.10",
         "rollup-plugin-node-externals": "^8.1.2",
         "tsx": "^4.21.0",
         "typedoc": "^0.28.18",

@@ -1,13 +1,13 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { createAgent } from "../src/agent.ts";
-import { AutoDialer } from "../src/dialers/index.ts";
+import { createAgent } from "../src/agent";
+import { AutoDialer } from "../src/dialers";
 import {
     AgentBusyError,
     OriginMismatchError,
     RequestAbortedError,
     ResponseDecodeError,
-} from "../src/errors.ts";
-import { createTestServer } from "./test-utils.ts";
+} from "../src/errors";
+import { createTestServer } from "./test-utils";
 
 describe("agent.ts", () => {
     const testServer = createTestServer();

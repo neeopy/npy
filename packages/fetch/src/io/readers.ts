@@ -13,104 +13,57 @@ export function sanitizeHeaderValue(v: string): string {
     return v.replace(invalidHeaderCharRegex, (m) => encodeURI(m));
 }
 
-/**
- * Reader options shared across the HTTP/1 response pipeline.
- *
- * @namespace Readers
- */
 export namespace Readers {
-    /**
-     * Buffering configuration.
-     *
-     * @property {number} [bufferSize] - Initial size (in bytes) for the internal buffer.
-     *
-     * @property {number} [highWaterMark] - Target read size (in bytes) for each pull from the underlying source.
-     * Defaults to 16 KiB.
-     */
     export interface BufferingOptions {
         bufferSize?: number;
-        highWaterMark?: number;
+        readChunkSize?: number;
     }
 
-    /**
-     * Response size limits.
-     *
-     * @property {number|string} [maxBodySize] - Maximum allowed entity-body size (raw, before content decoding).
-     * Can be a number of bytes or a human-readable string like "10mb".
-     *
-     * @property {number|string} [maxDecodedBodySize] - Maximum allowed decoded body size (after content decoding).
-     * Can be a number of bytes or a human-readable string like "10mb".
-     */
     export interface SizeLimitOptions {
         maxBodySize?: number | string;
         maxDecodedBodySize?: number | string;
     }
 
-    /**
-     * Decompression behavior.
-     *
-     * @property {boolean} [decompress] - If true, the response body may be transparently decompressed based on
-     * Content-Encoding. Defaults to true.
-     */
     export interface DecompressionOptions {
         decompress?: boolean;
     }
 
-    /**
-     * Delimiter scanning limits.
-     *
-     * @property {number} [maxLineSize] - Maximum allowed bytes for a single CRLF-delimited line (excluding CRLF).
-     * Defaults to 64 KiB.
-     *
-     * @property {number} [maxBufferedBytes] - Maximum allowed buffered bytes while searching for CRLF.
-     * Defaults to 256 KiB.
-     */
     export interface DelimiterLimitsOptions {
         maxLineSize?: number;
         maxBufferedBytes?: number;
     }
 
-    /**
-     * Unified options shape suitable for fetch-like response parsing.
-     */
-    export type Options = LineReader.Options &
-        BodyReader.Options &
-        ChunkedBodyReader.Options;
+    export interface BodyOptions
+        extends SizeLimitOptions,
+            DecompressionOptions {}
+
+    export interface ChunkedOptions extends BufferingOptions {
+        maxLineSize?: number;
+        maxChunkSize?: number;
+    }
+
+    export type Options = LineReader.Options & BodyOptions & ChunkedOptions;
 }
 
-/* -------------------------------------------------------------------------- */
-/*                               Line Reader                                  */
-/* -------------------------------------------------------------------------- */
-
-/**
- * CRLF-delimited reader that preserves over-reads in an internal buffer.
- *
- * Key property: once you finish reading headers, any bytes already read beyond
- * the header terminator stay buffered and will be returned by read().
- */
 export class LineReader implements IReadable, IClosable {
     #src: Source;
     #buf: Bytes;
     #codec = new DelimiterCodec(CRLF_BYTES, { strategy: "discard" });
     #eof = false;
-    #highWaterMark: number;
+
+    #readChunkSize: number;
     #maxBufferedBytes: number;
     #maxLineSize: number;
     #closed = false;
 
     close: () => Promise<void> | void;
 
-    /**
-     * LineReader configuration.
-     *
-     * @namespace LineReader
-     */
     static Options: never;
 
     constructor(src: Source, opts: LineReader.Options = {}) {
         this.#src = src;
         this.#buf = Bytes.alloc(opts.bufferSize);
-        this.#highWaterMark = opts.highWaterMark ?? 16 * 1024;
+        this.#readChunkSize = opts.readChunkSize ?? 16 * 1024;
         this.#maxBufferedBytes = opts.maxBufferedBytes ?? 256 * 1024;
         this.#maxLineSize = opts.maxLineSize ?? 64 * 1024;
         this.close = this.#close.bind(this);
@@ -256,7 +209,7 @@ export class LineReader implements IReadable, IClosable {
     }
 
     async #pull(): Promise<void> {
-        const into = this.#buf.writeSync(this.#highWaterMark);
+        const into = this.#buf.writeSync(this.#readChunkSize);
         try {
             const n = await this.#src.read(into);
             this.#buf.disposeWriteSync(n);
@@ -276,56 +229,20 @@ export class LineReader implements IReadable, IClosable {
     async #close(): Promise<void> {
         if (this.#closed) return;
         this.#closed = true;
-        try {
-            await this.#src.close();
-        } finally {
-            this.#closed = true;
-        }
+        await this.#src.close();
     }
 }
 
-/**
- * LineReader configuration.
- *
- * @namespace LineReader
- */
 export namespace LineReader {
-    /**
-     * LineReader instance options.
-     *
-     * @property {number} [bufferSize] - Initial size (in bytes) for the internal buffer.
-     *
-     * @property {number} [highWaterMark] - Target read size (in bytes) for each pull from the underlying source.
-     * Defaults to 16 KiB.
-     *
-     * @property {number} [maxLineSize] - Maximum allowed bytes for a single CRLF-delimited line (excluding CRLF).
-     * Defaults to 64 KiB.
-     *
-     * @property {number} [maxBufferedBytes] - Maximum allowed buffered bytes while searching for CRLF.
-     * Defaults to 256 KiB.
-     */
     export interface Options
         extends Readers.BufferingOptions,
             Readers.DelimiterLimitsOptions {}
 
-    /**
-     * Header parsing limits.
-     *
-     * @property {number} [maxHeaderSize] - Maximum allowed bytes for all header fields (including CRLFs).
-     * Defaults to 64 KiB.
-     */
     export interface ReadHeadersOptions {
         maxHeaderSize?: number;
     }
 }
 
-/* -------------------------------------------------------------------------- */
-/*                               Body Reader                                  */
-/* -------------------------------------------------------------------------- */
-
-/**
- * Body reader that streams bytes with either a fixed Content-Length or until EOF.
- */
 export class BodyReader implements IReadable, IClosable {
     #src: Source;
     #remaining: number | null;
@@ -335,44 +252,23 @@ export class BodyReader implements IReadable, IClosable {
 
     close: () => Promise<void> | void;
 
-    /**
-     * BodyReader configuration.
-     *
-     * @namespace BodyReader
-     */
     static Options: never;
 
     constructor(
         src: Source,
-        contentLength: number,
+        contentLength: number | null,
         opts: BodyReader.Options = {},
     ) {
         this.#src = src;
-        this.#remaining = contentLength >= 0 ? contentLength : null;
+        this.#remaining = contentLength;
         this.#maxResponseSize = parseMaxBytes(opts.maxBodySize);
-
-        if (
-            this.#maxResponseSize != null &&
-            this.#remaining != null &&
-            this.#remaining > this.#maxResponseSize
-        ) {
-            throw new Error(
-                `body too large: content-length=${this.#remaining} > maxResponseSize=${this.#maxResponseSize}`,
-            );
-        }
-
         this.close = this.#close.bind(this);
     }
 
     async read(into: Uint8Array): Promise<number> {
         if (this.#closed) return 0;
+
         if (this.#remaining === 0) return 0;
-
-        let max = into.length;
-
-        if (this.#remaining != null) {
-            max = Math.min(max, this.#remaining);
-        }
 
         if (this.#maxResponseSize != null) {
             const remainingLimit = this.#maxResponseSize - this.#readSoFar;
@@ -381,9 +277,13 @@ export class BodyReader implements IReadable, IClosable {
                     `body too large (> ${this.#maxResponseSize} bytes)`,
                 );
             }
-            max = Math.min(max, remainingLimit);
+            if (into.length > remainingLimit) {
+                into = into.subarray(0, remainingLimit);
+            }
         }
 
+        let max = into.length;
+        if (this.#remaining != null) max = Math.min(max, this.#remaining);
         if (max === 0) return 0;
 
         const view = max === into.length ? into : into.subarray(0, max);
@@ -414,50 +314,22 @@ export class BodyReader implements IReadable, IClosable {
     async #close(): Promise<void> {
         if (this.#closed) return;
         this.#closed = true;
-        try {
-            await this.#src.close();
-        } finally {
-            this.#closed = true;
-        }
+        await this.#src.close();
     }
 }
 
-/**
- * BodyReader configuration.
- *
- * @namespace BodyReader
- */
 export namespace BodyReader {
-    /**
-     * BodyReader instance options.
-     *
-     * @property {number|string} [maxBodySize] - Maximum allowed entity-body size (raw, before content decoding).
-     * Can be a number of bytes or a human-readable string like "10mb".
-     *
-     * @property {number|string} [maxDecodedBodySize] - Maximum allowed decoded body size (after content decoding).
-     * Can be a number of bytes or a human-readable string like "10mb".
-     *
-     * @property {boolean} [decompress] - If true, the response body may be transparently decompressed based on
-     * Content-Encoding. Defaults to true.
-     */
-    export interface Options
-        extends Readers.SizeLimitOptions,
-            Readers.DecompressionOptions {}
+    export interface Options {
+        maxBodySize?: number | string;
+    }
 }
 
-/* -------------------------------------------------------------------------- */
-/*                          Chunked Body Reader                               */
-/* -------------------------------------------------------------------------- */
-
-/**
- * RFC 7230 chunked transfer-coding decoder.
- */
 export class ChunkedBodyReader implements IReadable, IClosable {
     #src: Source;
     #buf: Bytes;
     #codec = new DelimiterCodec(CRLF_BYTES, { strategy: "discard" });
 
-    #highWaterMark: number;
+    #readChunkSize: number;
     #maxLineSize: number;
     #maxChunkSize: number;
     #maxResponseSize: number | null;
@@ -475,17 +347,12 @@ export class ChunkedBodyReader implements IReadable, IClosable {
 
     close: () => Promise<void> | void;
 
-    /**
-     * ChunkedBodyReader configuration.
-     *
-     * @namespace ChunkedBodyReader
-     */
     static Options: never;
 
     constructor(src: Source, opts: ChunkedBodyReader.Options = {}) {
         this.#src = src;
         this.#buf = Bytes.alloc(opts.bufferSize);
-        this.#highWaterMark = opts.highWaterMark ?? 16 * 1024;
+        this.#readChunkSize = opts.readChunkSize ?? 16 * 1024;
         this.#maxLineSize = opts.maxLineSize ?? 64 * 1024;
         this.#maxChunkSize = opts.maxChunkSize ?? 16 * 1024 * 1024;
         this.#maxResponseSize = parseMaxBytes(opts.maxBodySize);
@@ -635,7 +502,7 @@ export class ChunkedBodyReader implements IReadable, IClosable {
     }
 
     async #pull(): Promise<void> {
-        const into = this.#buf.writeSync(this.#highWaterMark);
+        const into = this.#buf.writeSync(this.#readChunkSize);
         try {
             const n = await this.#readFromSrc(into);
             this.#buf.disposeWriteSync(n);
@@ -694,47 +561,16 @@ export class ChunkedBodyReader implements IReadable, IClosable {
     async #close(): Promise<void> {
         if (this.#closed) return;
         this.#closed = true;
-        try {
-            await this.#src.close();
-        } finally {
-            this.#closed = true;
-        }
+        await this.#src.close();
     }
 }
 
-/**
- * ChunkedBodyReader configuration.
- *
- * @namespace ChunkedBodyReader
- */
 export namespace ChunkedBodyReader {
-    /**
-     * ChunkedBodyReader instance options.
-     *
-     * @property {number|string} [maxBodySize] - Maximum allowed entity-body size (raw, before content decoding).
-     * Can be a number of bytes or a human-readable string like "10mb".
-     *
-     * @property {number|string} [maxDecodedBodySize] - Maximum allowed decoded body size (after content decoding).
-     * Can be a number of bytes or a human-readable string like "10mb".
-     *
-     * @property {boolean} [decompress] - If true, the response body may be transparently decompressed based on
-     * Content-Encoding. Defaults to true.
-     *
-     * @property {number} [bufferSize] - Initial size (in bytes) for the internal buffer.
-     *
-     * @property {number} [highWaterMark] - Target read size (in bytes) for each pull from the underlying source.
-     * Defaults to 16 KiB.
-     *
-     * @property {number} [maxLineSize] - Maximum allowed bytes for CRLF-delimited chunk control lines.
-     * Defaults to 64 KiB.
-     *
-     * @property {number} [maxChunkSize] - Maximum allowed bytes for any single chunk.
-     * Defaults to 16 MiB.
-     */
     export interface Options
         extends BodyReader.Options,
             Readers.BufferingOptions {
         maxLineSize?: number;
+
         maxChunkSize?: number;
     }
 }
