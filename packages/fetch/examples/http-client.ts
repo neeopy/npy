@@ -1,22 +1,31 @@
 import { HttpClient } from "../src/http-client";
 
+// Create a custom HTTP client with advanced configuration
 const client = new HttpClient({
+    // Connection pooling
     poolMaxPerHost: 32,
     poolMaxIdlePerHost: 8,
+    poolIdleTimeout: 30_000,
+
+    // TCP socket options
     connect: {
         keepAlive: true,
         noDelay: true,
+        timeout: 5_000,
     },
+
+    // I/O configuration for performance tuning
     io: {
         reader: {
-            highWaterMark: 16 * 1024,
+            bufferSize: 32 * 1024,
+            readChunkSize: 16 * 1024,
             maxHeaderSize: 64 * 1024,
             maxLineSize: 64 * 1024,
             maxBufferedBytes: 256 * 1024,
             decompress: true,
         },
         writer: {
-            highWaterMark: 16 * 1024,
+            writeBufferSize: 16 * 1024,
             directWriteThreshold: 64 * 1024,
             coalesceBodyMaxBytes: 64 * 1024,
         },
@@ -25,23 +34,24 @@ const client = new HttpClient({
 
 try {
     const response = await client.send({
-        url: "https://httpbin.org/anything",
+        url: "https://httpbin.org/post",
         method: "POST",
         headers: new Headers({
             "content-type": "application/json",
-            "x-example": "advanced-http-client",
         }),
         body: JSON.stringify({
-            source: "HttpClient.send",
-            features: ["pooling", "custom I/O", "raw Response access"],
+            message: "Custom HTTP client with advanced I/O configuration",
+            timestamp: new Date().toISOString(),
         }),
     });
 
-    console.log("status:", response.status);
-    console.log("headers:", Object.fromEntries(response.headers.entries()));
+    if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+    }
 
+    console.log("status:", response.status);
     const data = await response.json();
-    console.log("echoed json:", data.json);
+    console.log("response data:", data.json);
 } finally {
     await client.close();
 }

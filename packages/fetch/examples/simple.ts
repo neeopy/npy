@@ -1,6 +1,7 @@
 import { fetch } from "../src/fetch";
 
-const response = await fetch("https://httpbin.org/anything");
+// Simple GET request using the drop-in fetch replacement
+const response = await fetch("https://httpbin.org/get");
 
 if (!response.ok) {
     throw new Error(`HTTP ${response.status}`);
@@ -9,7 +10,8 @@ if (!response.ok) {
 const data = await response.json();
 
 console.log("status:", response.status);
-console.log("url:", data.url);
-console.log("headers sent:", data.headers);
+console.log("origin:", data.origin);
+console.log("user-agent:", data.headers["User-Agent"]);
 
+// Always close the connection pool when done
 await fetch.close();

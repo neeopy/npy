@@ -2,15 +2,23 @@ import { ProxyDialer } from "../src/dialers/proxy";
 import { createFetch } from "../src/fetch";
 import { HttpClient } from "../src/http-client";
 
-const proxyUrl = process.env.HTTP_PROXY as string;
+// Using ProxyDialer with a custom HTTP client for explicit proxy control
+const proxyUrl = process.env.HTTP_PROXY || "http://proxy.example.com:8080";
 
 const client = new HttpClient({
+    // Use ProxyDialer for all connections through this client
     dialer: new ProxyDialer(proxyUrl),
+
+    // Configure connection pooling
     poolMaxPerHost: 16,
     poolMaxIdlePerHost: 4,
+    poolIdleTimeout: 30_000,
+
+    // TCP socket options
     connect: {
         keepAlive: true,
         noDelay: true,
+        timeout: 5_000,
     },
 });
 
@@ -25,8 +33,9 @@ try {
 
     const data = await response.json();
 
-    console.log("proxy:", proxyUrl);
-    console.log("origin seen by server:", data.origin);
+    console.log("✓ Request made through ProxyDialer");
+    console.log("  proxy:", proxyUrl);
+    console.log("  origin seen by server:", data.origin);
 } finally {
     await client.close();
 }
