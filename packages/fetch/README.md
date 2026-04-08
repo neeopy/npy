@@ -1,9 +1,9 @@
 # @npy/fetch
 
-An HTTP/1.1 client built on raw TCP sockets with a fetch-compatible API, per-origin connection pooling, and first-class proxy support.
+HTTP/1.1 client built on raw TCP sockets with a fetch-compatible API, per-origin connection pooling, explicit proxy support, and low-level primitives for custom transports and I/O tuning.
 
 > [!NOTE]
-> Node.js and Bun only — does not work in the browser.
+> Node.js and Bun only. This package does not run in the browser.
 
 ## Install
 
@@ -12,190 +12,262 @@ bun add @npy/fetch
 npm install @npy/fetch
 ```
 
-## Usage
+## What it provides
 
-### Simple fetch
+- `fetch`: a fetch-compatible client with connection pooling
+- `createFetch()`: create isolated fetch-like instances
+- `HttpClient`: lower-level reusable client with pool and I/O configuration
+- `ProxyDialer`, `TcpDialer`, `TlsDialer`, `AutoDialer`: transport selection
+- `Agent` and `AgentPool`: lower-level request/pool primitives
+- advanced error types for the non-weblike APIs
+
+## Quick start
 
 ```ts
-import { fetch } from '@npy/fetch'
+import { fetch } from "@npy/fetch";
 
-const response = await fetch('https://httpbin.org/get')
-const data = await response.json()
-console.log(data)
+const response = await fetch("https://httpbin.org/get");
 
-await fetch.close()
+if (!response.ok) {
+    throw new Error(`HTTP ${response.status}`);
+}
+
+const data = await response.json();
+
+console.log("status:", response.status);
+console.log("origin:", data.origin);
 ```
 
-### With proxy
-
-Pass a proxy URL directly to the fetch options:
+`fetch.close()` is still available, but it is no longer required just to let the process exit after requests complete and pooled connections return to idle. It remains useful for deterministic shutdown in tests, CLIs and explicit teardown paths.
 
 ```ts
-import { fetch } from '@npy/fetch'
-
-const response = await fetch('https://httpbin.org/ip', {
-    proxy: 'http://user:password@proxy.example.com:8080'
-})
-console.log(await response.json())
-
-await fetch.close()
+await fetch.close();
 ```
 
-Supports HTTP, HTTPS, and SOCKS5 proxies:
+## Request options
+
+The fetch-like API accepts standard `RequestInfo` / `RequestInit` input and preserves the expected web-style surface:
+
+- `method`, `headers`, `body`, `signal`
+- `redirect`: `"follow"` | `"manual"` | `"error"`
+- `proxy`
+- `proxy: null` to disable environment proxy resolution for that request
 
 ```ts
-// SOCKS5
-await fetch('https://example.com', {
-    proxy: 'socks5://user:password@proxy.example.com:1080'
-})
+import { fetch } from "@npy/fetch";
+
+const response = await fetch("https://httpbin.org/post", {
+    method: "POST",
+    headers: {
+        "content-type": "application/json",
+    },
+    body: JSON.stringify({
+        hello: "world",
+    }),
+});
+
+console.log(await response.json());
 ```
 
-### POST request
+## Proxies
+
+### Explicit proxy URL
 
 ```ts
-import { fetch } from '@npy/fetch'
+import { fetch } from "@npy/fetch";
 
-const response = await fetch('https://httpbin.org/post', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ hello: 'world' })
-})
-console.log(await response.json())
+const response = await fetch("https://httpbin.org/ip", {
+    proxy: "http://user:password@proxy.example.com:8080",
+});
 
-await fetch.close()
+console.log(await response.json());
 ```
 
-### Custom HTTP client
+Supported proxy schemes include HTTP, HTTPS and SOCKS5.
 
-For fine-grained control over connection pooling and I/O:
+### Disable environment proxies per request
 
 ```ts
-import { HttpClient } from '@npy/fetch'
+import { fetch } from "@npy/fetch";
+
+const response = await fetch("https://httpbin.org/ip", {
+    proxy: null,
+});
+```
+
+### Environment proxy resolution
+
+When no explicit proxy is provided, the fetch-like API can use proxy settings from the environment.
+
+Common variables:
+
+- `HTTP_PROXY`
+- `HTTPS_PROXY`
+- `SOCKS5_PROXY`
+- `SOCKS_PROXY`
+
+## Custom client
+
+Use `HttpClient` when you want explicit pool sizing, socket behavior or I/O limits.
+
+```ts
+import { HttpClient } from "@npy/fetch";
 
 const client = new HttpClient({
     poolMaxPerHost: 32,
     poolMaxIdlePerHost: 8,
+    poolIdleTimeout: 30_000,
     connect: {
         keepAlive: true,
         noDelay: true,
+        timeout: 5_000,
     },
     io: {
         reader: {
             bufferSize: 32 * 1024,
+            readChunkSize: 16 * 1024,
             maxHeaderSize: 64 * 1024,
-            maxBodySize: '50mb',
+            maxLineSize: 64 * 1024,
+            maxBufferedBytes: 256 * 1024,
+            maxBodySize: "25mb",
+            maxDecodedBodySize: "50mb",
+            maxChunkSize: 16 * 1024 * 1024,
             decompress: true,
         },
         writer: {
             writeBufferSize: 16 * 1024,
             directWriteThreshold: 64 * 1024,
+            coalesceBodyMaxBytes: 64 * 1024,
         },
     },
-})
+});
 
-const response = await client.send({
-    url: 'https://httpbin.org/post',
-    method: 'POST',
-    headers: new Headers({ 'content-type': 'application/json' }),
-    body: JSON.stringify({ data: 'example' }),
-})
+try {
+    const response = await client.send({
+        url: "https://httpbin.org/post",
+        method: "POST",
+        headers: new Headers({
+            "content-type": "application/json",
+        }),
+        body: JSON.stringify({
+            message: "advanced client",
+        }),
+    });
 
-console.log(await response.json())
-await client.close()
+    console.log(await response.json());
+} finally {
+    await client.close();
+}
 ```
 
-### With ProxyDialer
+## Custom fetch instance
 
-Use `ProxyDialer` for explicit proxy configuration with custom HTTP client:
+Use `createFetch()` to create an isolated fetch-like function bound to a specific `HttpClient`.
 
 ```ts
-import { createFetch, HttpClient } from '@npy/fetch'
-import { ProxyDialer } from '@npy/fetch/dialers'
+import { HttpClient, createFetch } from "@npy/fetch";
 
 const client = new HttpClient({
-    dialer: new ProxyDialer('http://user:password@proxy.example.com:8080'),
     poolMaxPerHost: 16,
     poolMaxIdlePerHost: 4,
-})
+});
 
-const fetch = createFetch(client)
-const response = await fetch('https://httpbin.org/ip')
-console.log(await response.json())
+const fetchLike = createFetch(client);
 
-await client.close()
+try {
+    const response = await fetchLike("https://httpbin.org/get");
+    console.log(await response.json());
+} finally {
+    await fetchLike.close();
+}
 ```
 
-Supports all proxy protocols:
+## Explicit proxy transport with ProxyDialer
+
+For fully explicit transport control, build a client with a dialer.
 
 ```ts
-// HTTP proxy
-new ProxyDialer('http://proxy.example.com:8080')
+import { HttpClient, ProxyDialer, createFetch } from "@npy/fetch";
 
-// HTTPS proxy
-new ProxyDialer('https://proxy.example.com:8443')
+const client = new HttpClient({
+    dialer: new ProxyDialer("http://user:password@proxy.example.com:8080"),
+    poolMaxPerHost: 16,
+    poolMaxIdlePerHost: 4,
+    poolIdleTimeout: 30_000,
+    connect: {
+        keepAlive: true,
+        noDelay: true,
+        timeout: 5_000,
+    },
+});
 
-// SOCKS5 proxy
-new ProxyDialer('socks5://proxy.example.com:1080')
+const proxiedFetch = createFetch(client);
 
-// With authentication
-new ProxyDialer('socks5://user:password@proxy.example.com:1080')
+try {
+    const response = await proxiedFetch("https://httpbin.org/ip");
+    console.log(await response.json());
+} finally {
+    await proxiedFetch.close();
+}
 ```
 
-## API
+## Error model
 
-### `fetch(input, init?)`
+There are two layers:
 
-Standard Fetch API with additional options:
+### Weblike API (`fetch`, `createFetch()`)
 
-- `proxy?: string | ProxyInfo | null` — Proxy URL (http, https, socks5)
-- `client?: HttpClient` — Custom HTTP client instance
+This layer behaves like platform `fetch` as closely as practical:
 
-### `HttpClient` options
+- network failures reject with `TypeError`
+- aborts preserve `AbortError`
+- `AbortSignal.timeout()` preserves `TimeoutError`
+- body-read failures surface as web-style errors
 
-**Pool:**
+### Advanced API (`HttpClient`, `Agent`, `AgentPool`)
 
-- `poolMaxPerHost` (default: `10`)
-- `poolMaxIdlePerHost` (default: `5`)
-- `poolIdleTimeout` (default: `30000` ms)
+These APIs preserve the library's richer error classes, including:
 
-**Connection:**
+- `ConnectionError`
+- `ConnectTimeoutError`
+- `RequestAbortedError`
+- `RequestWriteError`
+- `ResponseHeaderError`
+- `ResponseBodyError`
+- `ResponseDecodeError`
+- `HttpStatusError`
 
-- `connect.timeout` (default: `5000` ms)
-- `connect.keepAlive` (default: `true`)
-- `connect.noDelay` (default: `true`)
+Use this layer if you need retry classification, context-rich diagnostics or explicit transport control.
 
-**Reader:**
+## Limits and capabilities
 
-- `io.reader.bufferSize` — Internal buffer size
-- `io.reader.readChunkSize` — Chunk read size
-- `io.reader.maxHeaderSize` — Maximum header size
-- `io.reader.maxBodySize` — Maximum body size
-- `io.reader.maxLineSize` — Maximum line size
-- `io.reader.maxBufferedBytes` — Max buffered before processing
-- `io.reader.decompress` (default: `true`) — Auto-decompress gzip/deflate
+- HTTP/1.1 only
+- Node.js and Bun only
+- transparent response decompression is supported through reader options
+- request body encoding and transfer/content delimitation are handled automatically
+- per-origin pooling is built in
 
-**Writer:**
+## Exports
 
-- `io.writer.writeBufferSize` — Write buffer size
-- `io.writer.directWriteThreshold` — Direct write threshold
-- `io.writer.coalesceBodyMaxBytes` — Coalesce writes up to this size
+The package root exports the public surface, including:
 
-## Environment Variables
+- `fetch`, `createFetch`, `normalizeHeaders`
+- `HttpClient`
+- `createAgent`, `createAgentPool`
+- `TcpDialer`, `TlsDialer`, `AutoDialer`, `ProxyDialer`
+- body helpers, encoders, errors and public types
 
-The library respects standard proxy environment variables:
+Use root imports:
 
-- `HTTP_PROXY` — HTTP proxy URL
-- `HTTPS_PROXY` — HTTPS proxy URL
-- `SOCKS5_PROXY` — SOCKS5 proxy URL
-- `SOCKS_PROXY` — Alternative SOCKS proxy URL
-
-These are used when no explicit proxy is configured.
-
-## Limitations
-
-- **HTTP/1.1 only** — Does not support HTTP/2 or HTTP/3
-- **Node.js and Bun** — Browser environments are not supported
-- **Limited to standard HTTP methods** — GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS
+```ts
+import {
+    fetch,
+    createFetch,
+    HttpClient,
+    ProxyDialer,
+    AutoDialer,
+} from "@npy/fetch";
+```
 
 ## License
 

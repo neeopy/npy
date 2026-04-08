@@ -1,37 +1,35 @@
-import { createPool } from "generic-pool";
+import { unrefTimer } from "./_internal/event-loop";
 import { createAgent } from "./agent";
 import { AutoDialer } from "./dialers";
 import { UnsupportedProtocolError } from "./errors";
 import type { Agent, AgentPool } from "./types/agent";
 
-const defaultEvictionInterval = 10_000;
 const defaultMax = Number.MAX_SAFE_INTEGER;
 const defaultIdleTimeout = 30_000;
+
+interface IdleAgentEntry {
+    agent: Agent;
+    expiresAt: number;
+}
+
+interface PendingAcquire {
+    resolve: (agent: Agent) => void;
+    reject: (error: unknown) => void;
+}
+
+function defaultPort(protocol: string): number {
+    return protocol === "https:" ? 443 : 80;
+}
+
+function createPoolClosedError(origin: string): Error {
+    return new Error(`Agent pool is closed for ${origin}`);
+}
 
 export function createAgentPool(
     baseUrl: string,
     options: AgentPool.Options = {},
 ): AgentPool {
     const poolUrl = new URL(baseUrl);
-
-    const evictionRunIntervalMillis =
-        options.poolIdleTimeout !== false
-            ? Math.min(
-                  options.poolIdleTimeout || defaultEvictionInterval,
-                  defaultEvictionInterval,
-              )
-            : 0;
-    const max = options.poolMaxPerHost
-        ? Math.max(1, options.poolMaxPerHost)
-        : defaultMax;
-    const softIdleTimeoutMillis =
-        options.poolIdleTimeout !== false
-            ? Math.max(1, options.poolIdleTimeout || defaultIdleTimeout)
-            : -1;
-    const min =
-        softIdleTimeoutMillis > 0 && options.poolMaxIdlePerHost
-            ? Math.max(0, options.poolMaxIdlePerHost)
-            : 0;
 
     if (poolUrl.protocol !== "http:" && poolUrl.protocol !== "https:") {
         throw new UnsupportedProtocolError(poolUrl.protocol, {
@@ -42,89 +40,266 @@ export function createAgentPool(
         });
     }
 
+    const max = options.poolMaxPerHost
+        ? Math.max(1, options.poolMaxPerHost)
+        : defaultMax;
+
+    const idleTimeout =
+        options.poolIdleTimeout !== false
+            ? Math.max(1, options.poolIdleTimeout || defaultIdleTimeout)
+            : null;
+
+    // Keep the historical external behavior:
+    // poolMaxIdlePerHost only matters when idle eviction is enabled.
+    const maxIdle =
+        idleTimeout != null && options.poolMaxIdlePerHost != null
+            ? Math.max(0, options.poolMaxIdlePerHost)
+            : Number.MAX_SAFE_INTEGER;
+
     const dialer = options.dialer ?? new AutoDialer();
     const connectOptions = options.connect ?? {};
     const ioOptions = options.io;
 
-    const pool = createPool<Agent>(
-        {
-            async create() {
-                return createAgent(dialer, baseUrl, {
-                    connect: connectOptions,
-                    io: ioOptions,
-                });
-            },
-            async destroy(agent) {
-                agent.close();
-            },
-        },
-        {
-            autostart: false,
-            evictionRunIntervalMillis,
-            softIdleTimeoutMillis,
-            max,
-            min,
-        },
-    );
+    const idleAgents: IdleAgentEntry[] = [];
+    const busyAgents = new Set<Agent>();
+    const allAgents = new Set<Agent>();
+    const pendingAcquires: PendingAcquire[] = [];
 
-    let releaseAgentFns: Array<(forceClose?: boolean) => Promise<void>> = [];
+    let maintenanceTimer: ReturnType<typeof setTimeout> | undefined;
+    let closed = false;
     let closePromise: Promise<void> | undefined;
 
-    async function send(sendOptions: Agent.SendOptions): Promise<Response> {
-        let agent: Agent | undefined;
-        let agentReleased = false;
+    function createPoolAgent(): Agent {
+        const agent = createAgent(dialer, baseUrl, {
+            connect: connectOptions,
+            io: ioOptions,
+        });
 
-        const releaseAgentFn = async (forceClose = false) => {
-            if (!agent || agentReleased) return;
-            agentReleased = true;
-            releaseAgentFns = releaseAgentFns.filter(
-                (release) => release !== releaseAgentFn,
-            );
-            if (forceClose) agent.close();
-            if (pool.isBorrowedResource(agent)) await pool.release(agent);
-        };
+        allAgents.add(agent);
+        return agent;
+    }
 
-        releaseAgentFns.push(releaseAgentFn);
+    function clearMaintenanceTimer(): void {
+        if (maintenanceTimer === undefined) {
+            return;
+        }
+
+        clearTimeout(maintenanceTimer);
+        maintenanceTimer = undefined;
+    }
+
+    function removeIdleAgent(agent: Agent): void {
+        for (let i = idleAgents.length - 1; i >= 0; i -= 1) {
+            if (idleAgents[i]!.agent === agent) {
+                idleAgents.splice(i, 1);
+                break;
+            }
+        }
+    }
+
+    function closeAgent(agent: Agent): unknown | undefined {
+        removeIdleAgent(agent);
+        busyAgents.delete(agent);
+        allAgents.delete(agent);
 
         try {
-            agent = await pool.acquire();
+            agent.close();
+            return undefined;
+        } catch (error) {
+            return error;
+        }
+    }
+
+    function destroyAgent(agent: Agent): void {
+        // Non-explicit cleanup must remain conservative and non-throwing.
+        closeAgent(agent);
+    }
+
+    function rejectPendingAcquires(error: unknown): void {
+        while (pendingAcquires.length > 0) {
+            pendingAcquires.shift()!.reject(error);
+        }
+    }
+
+    function pruneExpiredIdleAgents(now: number = Date.now()): void {
+        if (idleTimeout == null || idleAgents.length === 0) {
+            return;
+        }
+
+        const expired: Agent[] = [];
+
+        for (let i = idleAgents.length - 1; i >= 0; i -= 1) {
+            const entry = idleAgents[i]!;
+            if (entry.expiresAt <= now) {
+                idleAgents.splice(i, 1);
+                expired.push(entry.agent);
+            }
+        }
+
+        for (const agent of expired) {
+            destroyAgent(agent);
+        }
+    }
+
+    function scheduleMaintenance(): void {
+        clearMaintenanceTimer();
+
+        if (closed || idleTimeout == null || idleAgents.length === 0) {
+            return;
+        }
+
+        let nextExpiresAt = Number.POSITIVE_INFINITY;
+        for (const entry of idleAgents) {
+            if (entry.expiresAt < nextExpiresAt) {
+                nextExpiresAt = entry.expiresAt;
+            }
+        }
+
+        if (!Number.isFinite(nextExpiresAt)) {
+            return;
+        }
+
+        const delay = Math.max(1, nextExpiresAt - Date.now());
+
+        maintenanceTimer = setTimeout(() => {
+            maintenanceTimer = undefined;
+            pruneExpiredIdleAgents();
+            scheduleMaintenance();
+        }, delay);
+
+        // Idle eviction is purely maintenance and must never keep the loop alive.
+        unrefTimer(maintenanceTimer);
+    }
+
+    function assertOpen(): void {
+        if (closed) {
+            throw createPoolClosedError(poolUrl.origin);
+        }
+    }
+
+    function releaseAgent(agent: Agent, forceClose = false): void {
+        if (!allAgents.has(agent)) {
+            return;
+        }
+
+        busyAgents.delete(agent);
+        removeIdleAgent(agent);
+
+        if (forceClose || closed) {
+            destroyAgent(agent);
+            return;
+        }
+
+        const waiter = pendingAcquires.shift();
+        if (waiter) {
+            busyAgents.add(agent);
+            waiter.resolve(agent);
+            return;
+        }
+
+        if (idleAgents.length >= maxIdle) {
+            destroyAgent(agent);
+            return;
+        }
+
+        idleAgents.push({
+            agent,
+            expiresAt:
+                idleTimeout == null
+                    ? Number.POSITIVE_INFINITY
+                    : Date.now() + idleTimeout,
+        });
+
+        scheduleMaintenance();
+    }
+
+    async function acquireAgent(): Promise<Agent> {
+        assertOpen();
+
+        pruneExpiredIdleAgents();
+
+        const idleEntry = idleAgents.pop();
+        if (idleEntry) {
+            busyAgents.add(idleEntry.agent);
+            scheduleMaintenance();
+            return idleEntry.agent;
+        }
+
+        if (allAgents.size < max) {
+            const agent = createPoolAgent();
+            busyAgents.add(agent);
+            return agent;
+        }
+
+        return new Promise<Agent>((resolve, reject) => {
+            pendingAcquires.push({ resolve, reject });
+        });
+    }
+
+    async function send(sendOptions: Agent.SendOptions): Promise<Response> {
+        const agent = await acquireAgent();
+        let released = false;
+
+        const release = (forceClose = false): void => {
+            if (released) {
+                return;
+            }
+
+            released = true;
+            releaseAgent(agent, forceClose);
+        };
+
+        try {
+            // Start the request first.
+            // This is critical: Agent.send() swaps the idle promise synchronously
+            // before its first await, so whenIdle() must observe the *new* pending
+            // cycle, not the previously resolved idle state.
             const responsePromise = agent.send(sendOptions);
 
             void agent.whenIdle().then(
-                () => releaseAgentFn(),
-                () => releaseAgentFn(true),
+                () => release(false),
+                () => release(true),
             );
 
-            return responsePromise;
+            return await responsePromise;
         } catch (error) {
-            await releaseAgentFn(true);
+            release(true);
             throw error;
         }
     }
 
     async function close(): Promise<void> {
-        if (closePromise) return closePromise;
+        if (closePromise) {
+            return closePromise;
+        }
+
+        if (closed) {
+            return;
+        }
 
         const promise = (async () => {
-            const pendingReleases = releaseAgentFns;
-            releaseAgentFns = [];
+            closed = true;
+            clearMaintenanceTimer();
 
-            const results = await Promise.allSettled([
-                ...pendingReleases.map((release) => release(true)),
-                (async () => {
-                    try {
-                        await pool.drain();
-                    } finally {
-                        await pool.clear();
-                    }
-                })(),
-            ]);
+            rejectPendingAcquires(createPoolClosedError(poolUrl.origin));
 
-            const errors = results.flatMap((result) =>
-                result.status === "rejected" ? [result.reason] : [],
-            );
+            const agents = Array.from(allAgents);
+            idleAgents.length = 0;
+            busyAgents.clear();
+            allAgents.clear();
 
-            if (errors.length === 1) throw errors[0];
+            const errors: unknown[] = [];
+
+            for (const agent of agents) {
+                const error = closeAgent(agent);
+                if (error !== undefined) {
+                    errors.push(error);
+                }
+            }
+
+            if (errors.length === 1) {
+                throw errors[0];
+            }
 
             if (errors.length > 1) {
                 throw new AggregateError(
@@ -139,7 +314,9 @@ export function createAgentPool(
         try {
             await promise;
         } finally {
-            if (closePromise === promise) closePromise = undefined;
+            if (closePromise === promise) {
+                closePromise = undefined;
+            }
         }
     }
 
@@ -149,9 +326,7 @@ export function createAgentPool(
         hostname: poolUrl.hostname,
         port: poolUrl.port
             ? Number.parseInt(poolUrl.port, 10)
-            : poolUrl.protocol === "https:"
-              ? 443
-              : 80,
+            : defaultPort(poolUrl.protocol),
         send,
     };
 }

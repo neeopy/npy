@@ -1,6 +1,6 @@
-import { fetch } from "../src/fetch";
+import { fetch } from "../src";
 
-// Simple GET request using the drop-in fetch replacement
+// Simple GET request using the default fetch-compatible client.
 const response = await fetch("https://httpbin.org/get");
 
 if (!response.ok) {
@@ -11,7 +11,8 @@ const data = await response.json();
 
 console.log("status:", response.status);
 console.log("origin:", data.origin);
-console.log("user-agent:", data.headers["User-Agent"]);
+console.log("url:", data.url);
 
-// Always close the connection pool when done
-await fetch.close();
+// Optional for deterministic teardown in tests or short-lived scripts.
+// Not required just to let the process exit naturally.
+// await fetch.close();

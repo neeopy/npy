@@ -1,20 +1,15 @@
-import { HttpClient } from "../src/http-client";
+import { HttpClient } from "../src";
 
-// Create a custom HTTP client with advanced configuration
+// Create a reusable HTTP client with per-origin pooling and I/O tuning.
 const client = new HttpClient({
-    // Connection pooling
     poolMaxPerHost: 32,
     poolMaxIdlePerHost: 8,
     poolIdleTimeout: 30_000,
-
-    // TCP socket options
     connect: {
         keepAlive: true,
         noDelay: true,
         timeout: 5_000,
     },
-
-    // I/O configuration for performance tuning
     io: {
         reader: {
             bufferSize: 32 * 1024,
@@ -22,6 +17,9 @@ const client = new HttpClient({
             maxHeaderSize: 64 * 1024,
             maxLineSize: 64 * 1024,
             maxBufferedBytes: 256 * 1024,
+            maxBodySize: "25mb",
+            maxDecodedBodySize: "50mb",
+            maxChunkSize: 16 * 1024 * 1024,
             decompress: true,
         },
         writer: {
@@ -49,9 +47,11 @@ try {
         throw new Error(`HTTP ${response.status}`);
     }
 
-    console.log("status:", response.status);
     const data = await response.json();
-    console.log("response data:", data.json);
+
+    console.log("status:", response.status);
+    console.log("response json:", data.json);
 } finally {
+    // Explicit close is still useful for predictable shutdown and tests.
     await client.close();
 }

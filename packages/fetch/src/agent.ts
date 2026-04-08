@@ -1,5 +1,10 @@
 import { Deferred } from "@fuman/utils";
 import { toConnectError, toSendError } from "./_internal/error-mapping";
+import {
+    refConnection,
+    unrefConnection,
+    unrefTimer,
+} from "./_internal/event-loop";
 import { raceSignal } from "./_internal/promises";
 import { bodyErrorMapperSymbol } from "./_internal/symbols";
 import {
@@ -113,21 +118,33 @@ export function createAgent(
     function disposeConn(): void {
         const current = conn;
         conn = undefined;
-        if (!current) return;
+
+        if (!current) {
+            return;
+        }
+
         try {
             current.close();
         } catch {}
     }
 
     function forceClose(): void {
-        if (closed) return;
+        if (closed) {
+            return;
+        }
+
         closed = true;
         disposeConn();
-        if (!isBusy) markIdle();
+
+        if (!isBusy) {
+            markIdle();
+        }
     }
 
     function assertUsable(): void {
-        if (closed) throw new AgentClosedError(createBaseErrorContext());
+        if (closed) {
+            throw new AgentClosedError(createBaseErrorContext());
+        }
     }
 
     function assertSameOrigin(url: URL): void {
@@ -141,6 +158,7 @@ export function createAgent(
 
     function configureConnection(nextConn: Dialer.ConnectionLike): void {
         nextConn.setNoDelay(connectOptions.noDelay ?? true);
+
         if (connectOptions.keepAlive !== null) {
             nextConn.setKeepAlive(connectOptions.keepAlive ?? true);
         }
@@ -150,25 +168,38 @@ export function createAgent(
         signal?: AbortSignal,
     ): Promise<Dialer.ConnectionLike> {
         assertUsable();
-        if (conn) return conn;
-        if (connectPromise) return withSignal(connectPromise, signal);
+
+        if (conn) {
+            return conn;
+        }
+
+        if (connectPromise) {
+            return withSignal(connectPromise, signal);
+        }
 
         let timedOut = false;
         let timeoutId: ReturnType<typeof setTimeout> | undefined;
         const abortController = new AbortController();
 
         const onAbort = () => abortController.abort(signal?.reason);
+
         const cleanup = () => {
             if (timeoutId !== undefined) {
                 clearTimeout(timeoutId);
                 timeoutId = undefined;
             }
-            if (signal) signal.removeEventListener("abort", onAbort);
+
+            if (signal) {
+                signal.removeEventListener("abort", onAbort);
+            }
         };
 
         if (signal) {
-            if (signal.aborted) abortController.abort(signal.reason);
-            else signal.addEventListener("abort", onAbort, { once: true });
+            if (signal.aborted) {
+                abortController.abort(signal.reason);
+            } else {
+                signal.addEventListener("abort", onAbort, { once: true });
+            }
         }
 
         if (
@@ -182,6 +213,9 @@ export function createAgent(
                     new DOMException("Connection timed out", "TimeoutError"),
                 );
             }, connectOptions.timeout);
+
+            // A connect timeout must not keep the process alive by itself.
+            unrefTimer(timeoutId);
         }
 
         connectPromise = (async () => {
@@ -194,6 +228,7 @@ export function createAgent(
                     try {
                         nextConn.close();
                     } catch {}
+
                     throw new AgentClosedError(createBaseErrorContext());
                 }
 
@@ -201,10 +236,12 @@ export function createAgent(
 
                 if (secure && isTlsConnection(nextConn)) {
                     const alpn = nextConn.getAlpnProtocol();
+
                     if (alpn != null && alpn !== "" && alpn !== "http/1.1") {
                         try {
                             nextConn.close();
                         } catch {}
+
                         throw new UnsupportedAlpnProtocolError(
                             alpn,
                             createBaseErrorContext(),
@@ -249,10 +286,16 @@ export function createAgent(
                 errorContext,
             );
         }
-        if (isBusy) throw new AgentBusyError(errorContext);
+
+        if (isBusy) {
+            throw new AgentBusyError(errorContext);
+        }
+
         assertSameOrigin(url);
-        if (method === "CONNECT")
+
+        if (method === "CONNECT") {
             throw new UnsupportedMethodError("CONNECT", errorContext);
+        }
 
         isBusy = true;
         idleDeferred = new Deferred<void>();
@@ -261,30 +304,48 @@ export function createAgent(
         let activeConn: Dialer.ConnectionLike | undefined;
 
         const finalize = (reusable: boolean) => {
-            if (finalized) return;
+            if (finalized) {
+                return;
+            }
+
             finalized = true;
+
             if (!reusable || closed) {
-                if (conn === activeConn) disposeConn();
-                else if (activeConn) {
+                if (conn === activeConn) {
+                    disposeConn();
+                } else if (activeConn) {
                     try {
                         activeConn.close();
                     } catch {}
                 }
+            } else if (conn === activeConn) {
+                // Once the response lifecycle is complete and the connection
+                // is eligible for reuse, it should no longer hold the loop open.
+                unrefConnection(activeConn);
             }
+
             markIdle();
         };
 
         const abortListener = () => {
-            if (activeConn) {
-                if (conn === activeConn) conn = undefined;
-                try {
-                    activeConn.close();
-                } catch {}
+            if (!activeConn) {
+                return;
             }
+
+            if (conn === activeConn) {
+                conn = undefined;
+            }
+
+            try {
+                activeConn.close();
+            } catch {}
         };
 
         try {
             activeConn = await connect(sendOptions.signal);
+
+            // Active request I/O must keep the process alive.
+            refConnection(activeConn);
 
             sendOptions.signal?.addEventListener("abort", abortListener, {
                 once: true,
@@ -352,7 +413,10 @@ export function createAgent(
             sendOptions.signal?.removeEventListener("abort", abortListener);
 
             if (activeConn) {
-                if (conn === activeConn) conn = undefined;
+                if (conn === activeConn) {
+                    conn = undefined;
+                }
+
                 try {
                     activeConn.close();
                 } catch {}
@@ -368,6 +432,7 @@ export function createAgent(
             typeof sendOptions.url === "string"
                 ? new URL(sendOptions.url)
                 : sendOptions.url;
+
         const errorContext = createRequestErrorContext(
             url,
             sendOptions.method.toUpperCase(),

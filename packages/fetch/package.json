@@ -30,10 +30,10 @@
         "got": "^14.4.6",
         "hpagent": "^1.2.0",
         "http-proxy-agent": "^7.0.2",
+        "mitata": "^1.0.34",
         "node-fetch": "^3.3.2",
         "proxy-chain": "^2.7.1",
-        "undici": "^7.13.0",
-        "mitata": "^1.0.34"
+        "undici": "^7.13.0"
     },
     "dependencies": {
         "@fuman/io": "^0.0.19",
@@ -41,7 +41,6 @@
         "@fuman/node": "^0.0.19",
         "@fuman/utils": "^0.0.19",
         "@npy/proxy-kit": "workspace:*",
-        "bytes": "^3.1.2",
-        "generic-pool": "^3.9.0"
+        "bytes": "^3.1.2"
     }
 }
