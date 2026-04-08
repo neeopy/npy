@@ -2,7 +2,7 @@
     "name": "npy",
     "type": "module",
     "private": true,
-    "version": "0.1.4",
+    "version": "0.1.5",
     "license": "MIT",
     "scripts": {
         "build:packages": "bun run scripts/build-all.js",
